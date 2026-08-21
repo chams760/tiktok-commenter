@@ -2,6 +2,7 @@ import asyncio
 import json
 import io
 from datetime import datetime, timezone
+from aiohttp import web
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -390,8 +391,37 @@ async def handle_webapp_data(msg: types.Message):
         await msg.answer(f"Ошибка: {e}")
 
 
+async def health_handler(request):
+    stats = await db.get_stats()
+    return web.json_response({
+        "status": "ok",
+        "accounts": stats["accounts_active"],
+        "comments_sent": stats["comments_sent"],
+        "active_tasks": stats["active_tasks"],
+    })
+
+
+async def webapp_handler(request):
+    webapp_path = os.path.join(os.path.dirname(__file__), "webapp", "index.html")
+    return web.FileResponse(webapp_path)
+
+
+async def start_health_server():
+    app = web.Application()
+    app.router.add_get("/", health_handler)
+    app.router.add_get("/health", health_handler)
+    app.router.add_get("/webapp", webapp_handler)
+    port = int(os.environ.get("PORT", 8080))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"Health-сервер запущен на порту {port}")
+
+
 async def main():
     await db.init_db()
+    await start_health_server()
     logger.info("Бот запущен")
     await dp.start_polling(bot)
 
