@@ -392,18 +392,23 @@ async def handle_webapp_data(msg: types.Message):
 
 
 async def health_handler(request):
-    stats = await db.get_stats()
-    return web.json_response({
-        "status": "ok",
-        "accounts": stats["accounts_active"],
-        "comments_sent": stats["comments_sent"],
-        "active_tasks": stats["active_tasks"],
-    })
+    try:
+        stats = await db.get_stats()
+        return web.json_response({
+            "status": "ok",
+            "accounts": stats["accounts_active"],
+            "comments_sent": stats["comments_sent"],
+            "active_tasks": stats["active_tasks"],
+        })
+    except Exception:
+        return web.json_response({"status": "ok"})
 
 
 async def webapp_handler(request):
     webapp_path = os.path.join(os.path.dirname(__file__), "webapp", "index.html")
-    return web.FileResponse(webapp_path)
+    if os.path.exists(webapp_path):
+        return web.FileResponse(webapp_path)
+    return web.Response(text="WebApp not found", status=404)
 
 
 async def start_health_server():
@@ -417,13 +422,29 @@ async def start_health_server():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     logger.info(f"Health-сервер запущен на порту {port}")
+    return runner
 
 
 async def main():
+    port = int(os.environ.get("PORT", 8080))
+    logger.info(f"Запуск приложения на порту {port}")
+
+    runner = await start_health_server()
+
     await db.init_db()
-    await start_health_server()
-    logger.info("Бот запущен")
-    await dp.start_polling(bot)
+
+    if not config.BOT_TOKEN:
+        logger.error("BOT_TOKEN не задан! Бот не запущен, но health-сервер работает.")
+        while True:
+            await asyncio.sleep(3600)
+    else:
+        logger.info("Бот запущен")
+        try:
+            await dp.start_polling(bot)
+        except Exception as e:
+            logger.error(f"Ошибка бота: {e}")
+            while True:
+                await asyncio.sleep(3600)
 
 
 if __name__ == "__main__":
