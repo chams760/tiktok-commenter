@@ -19,11 +19,11 @@ os.makedirs(SESSIONS_DIR, exist_ok=True)
 _active_pages: dict[int, Page] = {}
 
 _USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:128.0) Gecko/20100101 Firefox/128.0",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
 ]
 
 _VIEWPORTS = [
@@ -102,28 +102,16 @@ async def _detect_captcha(page: Page) -> str | None:
 
 _STEALTH_JS = """
 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-
 Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-
-window.chrome = { runtime: {}, loadTimes: function(){}, csi: function(){} };
-
-const originalQuery = window.navigator.permissions.query;
-window.navigator.permissions.query = (parameters) =>
-    parameters.name === 'notifications'
-        ? Promise.resolve({ state: Notification.permission })
-        : originalQuery(parameters);
-
-Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
 Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 4});
-Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
 
-const getParameter = WebGLRenderingContext.prototype.getParameter;
-WebGLRenderingContext.prototype.getParameter = function(parameter) {
-    if (parameter === 37445) return 'Intel Inc.';
-    if (parameter === 37446) return 'Intel Iris OpenGL Engine';
-    return getParameter.call(this, parameter);
-};
+if (window.navigator.permissions) {
+    const originalQuery = window.navigator.permissions.query;
+    window.navigator.permissions.query = (parameters) =>
+        parameters.name === 'notifications'
+            ? Promise.resolve({ state: Notification.permission })
+            : originalQuery(parameters);
+}
 """
 
 
@@ -265,17 +253,10 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
         steps.append({"step": step_name, "file": fname, "note": info, "url": page.url})
 
     async with async_playwright() as pw:
-        launch_opts = {
-            "headless": False,
-            "args": [
-                "--disable-blink-features=AutomationControlled",
-                "--no-first-run",
-                "--no-default-browser-check",
-            ],
-        }
+        launch_opts = {"headless": False}
         if proxy_config:
             launch_opts["proxy"] = proxy_config
-        browser = await pw.chromium.launch(**launch_opts)
+        browser = await pw.firefox.launch(**launch_opts)
         ctx = await _create_stealth_context(browser, proxy_config)
         page = await ctx.new_page()
         await _apply_stealth(page)
@@ -489,10 +470,7 @@ async def run_task(task_id: int):
         comments_failed = task["comments_failed"]
 
         try:
-            browser = await pw.chromium.launch(
-                headless=False,
-                args=["--disable-blink-features=AutomationControlled", "--no-first-run", "--no-default-browser-check"],
-            )
+            browser = await pw.firefox.launch(headless=False)
             probe_ctx = await _create_stealth_context(browser)
             probe_page = await probe_ctx.new_page()
             await _apply_stealth(probe_page)
@@ -521,15 +499,12 @@ async def run_task(task_id: int):
                     return
 
                 proxy_config = parse_proxy(account.get("proxy", ""))
-                launch_opts = {
-                    "headless": False,
-                    "args": ["--disable-blink-features=AutomationControlled", "--no-first-run", "--no-default-browser-check"],
-                }
+                launch_opts = {"headless": False}
                 if proxy_config:
                     launch_opts["proxy"] = proxy_config
                     logger.info(f"Используется прокси: {proxy_config['server']} для {account['username']}")
 
-                browser = await pw.chromium.launch(**launch_opts)
+                browser = await pw.firefox.launch(**launch_opts)
                 ctx = await _create_stealth_context(browser, proxy_config)
                 page = await ctx.new_page()
                 await _apply_stealth(page)
