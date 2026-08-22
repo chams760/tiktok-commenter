@@ -95,11 +95,38 @@ def _random_mouse_move(driver: uc.Chrome, steps=3):
 
 def _dismiss_cookie_banner(driver: uc.Chrome):
     try:
-        buttons = driver.find_elements(By.XPATH, '//button[contains(text(),"Decline optional cookies") or contains(text(),"Allow all") or contains(text(),"Accept")]')
-        if buttons:
-            buttons[-1].click()
-            _human_delay(1, 2)
-            logger.debug("Cookie banner dismissed")
+        xpaths = [
+            '//button[contains(text(),"Decline optional")]',
+            '//button[contains(text(),"Reject")]',
+            '//button[contains(text(),"Allow all")]',
+            '//button[contains(text(),"Accept all")]',
+            '//button[contains(text(),"Accept")]',
+            '//button[contains(text(),"Alle akzeptieren")]',
+            '//button[contains(text(),"Tout accepter")]',
+            '//button[contains(text(),"Принять")]',
+            '//div[contains(@class,"cookie")]//button',
+            '//div[contains(@class,"consent")]//button',
+            '//div[contains(@id,"cookie")]//button',
+            '//div[contains(@class,"banner")]//button[last()]',
+            '//tiktok-cookie-banner//button',
+        ]
+        for xp in xpaths:
+            try:
+                btns = driver.find_elements(By.XPATH, xp)
+                for btn in btns:
+                    if btn.is_displayed() and btn.size['height'] > 0:
+                        btn.click()
+                        _human_delay(1, 2)
+                        logger.debug(f"Cookie banner dismissed via: {xp}")
+                        return
+            except Exception:
+                continue
+        try:
+            driver.execute_script("""
+                document.querySelectorAll('[class*="cookie"], [class*="consent"], [class*="banner"], [id*="cookie"], tiktok-cookie-banner').forEach(el => el.remove());
+            """)
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -260,10 +287,13 @@ def _test_login_sync(username: str, password: str, proxy: str = "") -> list[dict
 
         driver.get("https://www.tiktok.com")
         _human_delay(2, 4)
+        _dismiss_cookie_banner(driver)
         snap(driver, "warmup", "Visited TikTok homepage")
 
         driver.get("https://www.tiktok.com/login/phone-or-email/email")
         _human_delay(3, 5)
+        _dismiss_cookie_banner(driver)
+        _human_delay(1, 2)
         _dismiss_cookie_banner(driver)
         _random_mouse_move(driver, 3)
         snap(driver, "login_page", "Login page loaded (undetected-chromedriver)")
@@ -321,23 +351,36 @@ def _test_login_sync(username: str, password: str, proxy: str = "") -> list[dict
 
             snap(driver, "verify_page_source", f"Page text: {body_text[:500]}")
 
+            _dismiss_cookie_banner(driver)
+            _human_delay(1, 2)
+
+            page_html = driver.page_source
+            snap(driver, "verify_after_cookie_dismiss", "After dismissing cookie banner")
+
+            def _is_in_cookie_block(el):
+                try:
+                    parent_html = el.find_element(By.XPATH, './ancestor::*[contains(@class,"cookie") or contains(@class,"consent") or contains(@class,"banner") or contains(@id,"cookie")]')
+                    return True
+                except Exception:
+                    return False
+
             email_clicked = False
             selectors = [
-                (By.XPATH, '//*[contains(text(),"mail") and not(contains(text(),"@"))]'),
-                (By.XPATH, '//div[contains(@class,"verify")]//div[contains(text(),"mail")]'),
-                (By.XPATH, '//*[contains(text(),"Email") or contains(text(),"email") or contains(text(),"EMAIL")]'),
-                (By.XPATH, '//a[contains(text(),"mail")]'),
-                (By.XPATH, '//button[contains(text(),"mail")]'),
-                (By.XPATH, '//span[contains(text(),"mail")]'),
-                (By.XPATH, '//p[contains(text(),"mail")]'),
-                (By.XPATH, '//label[contains(text(),"mail")]'),
-                (By.CSS_SELECTOR, '[data-e2e*="email"], [class*="email"], [class*="Email"]'),
+                (By.CSS_SELECTOR, '[data-e2e*="email"], [data-e2e*="Email"]'),
+                (By.XPATH, '//*[contains(@class,"verify") or contains(@class,"Verify")]//descendant::*[contains(text(),"mail") or contains(text(),"Mail")]'),
+                (By.XPATH, '//div[contains(text(),"Email") or contains(text(),"email")]'),
+                (By.XPATH, '//span[contains(text(),"Email") or contains(text(),"email")]'),
+                (By.XPATH, '//button[contains(text(),"Email") or contains(text(),"email")]'),
+                (By.XPATH, '//a[contains(text(),"Email") or contains(text(),"email")]'),
+                (By.XPATH, '//p[contains(text(),"Email") or contains(text(),"email")]'),
+                (By.XPATH, '//label[contains(text(),"Email") or contains(text(),"email")]'),
+                (By.CSS_SELECTOR, '[class*="email"], [class*="Email"]'),
             ]
             for by, sel in selectors:
                 try:
                     elements = driver.find_elements(by, sel)
                     for el in elements:
-                        if el.is_displayed() and el.size['height'] > 0:
+                        if el.is_displayed() and el.size['height'] > 0 and not _is_in_cookie_block(el):
                             ActionChains(driver).move_to_element(el).pause(0.5).click().perform()
                             _human_delay(2, 4)
                             snap(driver, "verify_email_clicked", f"Clicked Email option via: {sel}")
@@ -350,15 +393,38 @@ def _test_login_sync(username: str, password: str, proxy: str = "") -> list[dict
 
             if not email_clicked:
                 try:
-                    all_clickable = driver.find_elements(By.XPATH, '//div[@role="button" or @tabindex] | //button | //a[not(@href)]')
-                    for el in all_clickable:
-                        txt = el.text.lower()
-                        if 'mail' in txt or 'email' in txt or 'почт' in txt:
+                    all_els = driver.find_elements(By.XPATH, '//*[@role="button" or @tabindex or self::button or self::a]')
+                    for el in all_els:
+                        if not el.is_displayed() or el.size['height'] == 0:
+                            continue
+                        txt = el.text.lower().strip()
+                        if ('mail' in txt or 'email' in txt or 'почт' in txt) and not _is_in_cookie_block(el):
                             ActionChains(driver).move_to_element(el).pause(0.5).click().perform()
                             _human_delay(2, 4)
                             snap(driver, "verify_email_clicked_fallback", f"Clicked via fallback: {el.text[:50]}")
                             email_clicked = True
                             break
+                except Exception:
+                    pass
+
+            if not email_clicked:
+                try:
+                    driver.execute_script("""
+                        var els = document.querySelectorAll('*');
+                        for (var i = 0; i < els.length; i++) {
+                            var t = els[i].innerText || '';
+                            if (t.match(/^\\s*e-?mail\\s*$/i) && els[i].offsetHeight > 0) {
+                                els[i].click();
+                                return 'clicked';
+                            }
+                        }
+                        return 'not_found';
+                    """)
+                    _human_delay(2, 4)
+                    new_body = driver.find_element(By.TAG_NAME, "body").text
+                    if new_body != body_text:
+                        snap(driver, "verify_email_clicked_js", "Clicked Email via JS")
+                        email_clicked = True
                 except Exception:
                     pass
 
