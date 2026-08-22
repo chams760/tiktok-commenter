@@ -56,6 +56,16 @@ RUN CHROME_URL="https://dl.google.com/linux/direct/google-chrome-stable_current_
     && rm -rf /tmp/chromedriver* \
     && chromedriver --version
 
+# Patch chromedriver: remove cdc_ detection variable (same as undetected-chromedriver)
+RUN python3 -c "\
+import re, sys; \
+f=open('/usr/local/bin/chromedriver','rb'); d=f.read(); f.close(); \
+p=re.sub(rb'cdc_[a-zA-Z0-9]{22}_', lambda m: b'aaa_' + b'a'*(len(m.group())-4), d); \
+changed=d!=p; \
+f=open('/usr/local/bin/chromedriver','wb'); f.write(p); f.close(); \
+print(f'Chromedriver patched: {changed}'); \
+"
+
 WORKDIR /app
 
 COPY requirements.txt .

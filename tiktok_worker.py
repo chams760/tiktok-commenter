@@ -137,53 +137,87 @@ def _dismiss_cookie_banner(driver: webdriver.Chrome):
 
 
 _STEALTH_JS = """
-// Override webdriver
 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
 
-// Chrome runtime
-window.chrome = {runtime: {}, loadTimes: function(){}, csi: function(){}, app: {isInstalled: false, getDetails: function(){}, getIsInstalled: function(){}}};
+window.chrome = {runtime: {}, loadTimes: function(){return {}}, csi: function(){return {}}, app: {isInstalled: false, getDetails: function(){return {}}, getIsInstalled: function(){return false}, InstallState: {DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed'}, RunningState: {CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running'}}};
 
-// Plugins
 Object.defineProperty(navigator, 'plugins', {
-    get: () => [
-        {name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format'},
-        {name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: ''},
-        {name: 'Native Client', filename: 'internal-nacl-plugin', description: ''},
-    ]
+    get: () => {
+        var arr = [
+            {name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format', length: 1},
+            {name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '', length: 1},
+            {name: 'Native Client', filename: 'internal-nacl-plugin', description: '', length: 1},
+        ];
+        arr.__proto__ = PluginArray.prototype;
+        return arr;
+    }
 });
 
-// Languages
 Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-
-// Platform
 Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
-
-// Hardware concurrency
 Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
-
-// Device memory
 Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
+Object.defineProperty(navigator, 'maxTouchPoints', {get: () => 0});
+Object.defineProperty(navigator, 'connection', {get: () => ({effectiveType: '4g', rtt: 50, downlink: 10, saveData: false})});
 
-// WebGL vendor/renderer
 const getParameter = WebGLRenderingContext.prototype.getParameter;
 WebGLRenderingContext.prototype.getParameter = function(param) {
     if (param === 37445) return 'Google Inc. (NVIDIA)';
     if (param === 37446) return 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 Direct3D11 vs_5_0 ps_5_0, D3D11)';
     return getParameter.call(this, param);
 };
+try {
+    const getParameter2 = WebGL2RenderingContext.prototype.getParameter;
+    WebGL2RenderingContext.prototype.getParameter = function(param) {
+        if (param === 37445) return 'Google Inc. (NVIDIA)';
+        if (param === 37446) return 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 Direct3D11 vs_5_0 ps_5_0, D3D11)';
+        return getParameter2.call(this, param);
+    };
+} catch(e) {}
 
-// Permissions
-const origQuery = window.Notification && Notification.permission;
-if (window.Notification) {
-    Notification.requestPermission = function() { return Promise.resolve('default'); };
-}
+const originalQuery = window.navigator.permissions.query;
+window.navigator.permissions.query = (parameters) => (
+    parameters.name === 'notifications'
+        ? Promise.resolve({state: Notification.permission})
+        : originalQuery(parameters)
+);
 
-// Iframe contentWindow
 try {
     Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
         get: function() { return window; }
     });
 } catch(e) {}
+
+// Headless detection bypass
+Object.defineProperty(navigator, 'vendor', {get: () => 'Google Inc.'});
+Object.defineProperty(navigator, 'appVersion', {get: () => '5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'});
+
+// Screen properties for headless
+Object.defineProperty(screen, 'colorDepth', {get: () => 24});
+Object.defineProperty(screen, 'pixelDepth', {get: () => 24});
+if (!window.outerWidth) Object.defineProperty(window, 'outerWidth', {get: () => 1920});
+if (!window.outerHeight) Object.defineProperty(window, 'outerHeight', {get: () => 1080});
+
+// Prevent CDP detection via Error stack
+const origError = Error;
+window.Error = function(...args) {
+    const err = new origError(...args);
+    const stack = err.stack;
+    if (stack && stack.includes('_cdp')) {
+        err.stack = stack.replace(/_cdp/g, '_xxx');
+    }
+    return err;
+};
+window.Error.prototype = origError.prototype;
+
+// Remove chromedriver-injected properties from document
+for (var prop in document) {
+    if (prop.match(/^\\$cdc_|^\\$wdc_/)) {
+        try { delete document[prop]; } catch(e) {
+            try { Object.defineProperty(document, prop, {get: () => undefined}); } catch(e2) {}
+        }
+    }
+}
 """
 
 
@@ -252,9 +286,37 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
     if chrome_binary:
         options.binary_location = chrome_binary
 
-    driver = webdriver.Chrome(options=options)
+    service = Service("/usr/local/bin/chromedriver")
+    driver = webdriver.Chrome(service=service, options=options)
     driver.set_window_size(1920, 1080)
 
+    # CDP stealth: inject BEFORE any page loads
+    try:
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _STEALTH_JS})
+    except Exception:
+        pass
+
+    # Remove webdriver flag via CDP
+    try:
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": """
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                // Remove Automation flags from permissions
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                    Promise.resolve({state: Notification.permission}) :
+                    originalQuery(parameters)
+                );
+                // Mask chrome.runtime for headless
+                if (!window.chrome) { window.chrome = {}; }
+                if (!window.chrome.runtime) { window.chrome.runtime = {}; }
+            """
+        })
+    except Exception:
+        pass
+
+    # Apply selenium-stealth on top
     try:
         from selenium_stealth import stealth
         stealth(driver,
@@ -266,14 +328,7 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
             fix_hairline=True,
         )
     except Exception as e:
-        logger.debug(f"selenium-stealth failed: {e}, using manual JS stealth")
-        try:
-            driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _STEALTH_JS})
-        except Exception:
-            try:
-                driver.execute_script(_STEALTH_JS)
-            except Exception:
-                pass
+        logger.debug(f"selenium-stealth failed: {e}")
 
     logger.info(f"Chrome driver created | proxy={bool(proxy_str)} | auth={proxy_has_auth}")
     return driver
