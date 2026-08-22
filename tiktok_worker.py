@@ -253,7 +253,7 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
         steps.append({"step": step_name, "file": fname, "note": info, "url": page.url})
 
     async with async_playwright() as pw:
-        launch_opts = {"headless": False}
+        launch_opts = {"headless": True}
         if proxy_config:
             launch_opts["proxy"] = proxy_config
         browser = await pw.firefox.launch(**launch_opts)
@@ -470,7 +470,7 @@ async def run_task(task_id: int):
         comments_failed = task["comments_failed"]
 
         try:
-            browser = await pw.firefox.launch(headless=False)
+            browser = await pw.firefox.launch(headless=True)
             probe_ctx = await _create_stealth_context(browser)
             probe_page = await probe_ctx.new_page()
             await _apply_stealth(probe_page)
@@ -499,7 +499,7 @@ async def run_task(task_id: int):
                     return
 
                 proxy_config = parse_proxy(account.get("proxy", ""))
-                launch_opts = {"headless": False}
+                launch_opts = {"headless": True}
                 if proxy_config:
                     launch_opts["proxy"] = proxy_config
                     logger.info(f"Используется прокси: {proxy_config['server']} для {account['username']}")

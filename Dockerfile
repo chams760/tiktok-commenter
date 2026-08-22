@@ -28,14 +28,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-unifont \
     wget \
     ca-certificates \
-    xvfb \
     libgtk-3-0 \
     libgdk-pixbuf2.0-0 \
     libxcursor1 \
     libdbus-glib-1-2 \
     && rm -rf /var/lib/apt/lists/*
-
-ENV DISPLAY=:99
 
 WORKDIR /app
 
@@ -50,4 +47,4 @@ RUN mkdir -p logs screenshots sessions
 
 EXPOSE 8080
 
-CMD ["bash", "-c", "Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp &  sleep 1 && python bot.py"]
+CMD ["python", "bot.py"]
