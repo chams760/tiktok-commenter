@@ -209,6 +209,26 @@
         /* Spinner */
         .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--text-3); border-top-color: var(--accent); border-radius: 50%; animation: spin .6s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Screenshot */
+        .screen-wrap {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: var(--radius); overflow: hidden; margin-bottom: 10px;
+        }
+        .screen-wrap img {
+            width: 100%; display: block; border-radius: var(--radius);
+            cursor: pointer;
+        }
+        .screen-meta {
+            padding: 10px 14px; font-size: 11px; color: var(--text-3);
+            border-top: 1px solid var(--border);
+        }
+        .screen-placeholder {
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            min-height: 200px; color: var(--text-3);
+        }
+        .screen-placeholder svg { width: 40px; height: 40px; opacity: 0.2; margin-bottom: 10px; }
+        .screen-placeholder span { font-size: 13px; }
     </style>
 </head>
 <body>
@@ -347,6 +367,28 @@
     </button>
 </div>
 
+<!-- ── Debug ── -->
+<div id="panel-debug" class="panel">
+    <div class="section-label">Live screenshot</div>
+    <div id="live-screen" class="screen-wrap">
+        <div class="screen-placeholder">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            <span>Press the button to capture</span>
+        </div>
+    </div>
+    <button class="btn btn-primary" id="btn-screen" onclick="takeScreenshot()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+        Take screenshot
+    </button>
+
+    <div class="section-label" style="margin-top:24px;">Error screenshots</div>
+    <div id="error-screens"></div>
+    <button class="btn btn-secondary" onclick="loadErrors()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        Load error history
+    </button>
+</div>
+
 <!-- ── Tab bar ── -->
 <nav class="tabbar">
     <button class="tabbar-item active" onclick="showTab('dashboard',this)">
@@ -355,11 +397,15 @@
     </button>
     <button class="tabbar-item" onclick="showTab('task',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-        <span class="tabbar-label">New task</span>
+        <span class="tabbar-label">Task</span>
     </button>
     <button class="tabbar-item" onclick="showTab('accounts',this)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
         <span class="tabbar-label">Accounts</span>
+    </button>
+    <button class="tabbar-item" onclick="showTab('debug',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+        <span class="tabbar-label">Debug</span>
     </button>
     <button class="tabbar-item" onclick="showTab('settings',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -532,6 +578,49 @@ function saveSettings() {
         delay_max: document.getElementById('delay-max').value
     }));
     toast('Settings saved', 'success');
+}
+
+async function takeScreenshot() {
+    const btn = document.getElementById('btn-screen');
+    const wrap = document.getElementById('live-screen');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Capturing...';
+    try {
+        const res = await fetch(API + '/api/screenshot', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            wrap.innerHTML = `<div class="screen-placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg><span>${esc(err.error || 'No active browser')}</span></div>`;
+            toast(err.error || 'No active browser session', 'error');
+        } else {
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const time = new Date().toLocaleTimeString();
+            wrap.innerHTML = `<img src="${url}" onclick="window.open(this.src)"><div class="screen-meta">Captured at ${time}</div>`;
+            toast('Screenshot captured', 'success');
+        }
+    } catch (e) {
+        toast('Connection error', 'error');
+    }
+    btn.disabled = false;
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg> Take screenshot';
+}
+
+async function loadErrors() {
+    const el = document.getElementById('error-screens');
+    el.innerHTML = '<div style="text-align:center;padding:16px;"><span class="spinner"></span></div>';
+    const res = await api('GET', '/api/errors');
+    if (!res.files || !res.files.length) {
+        el.innerHTML = '<div class="empty"><span>No error screenshots</span></div>';
+        return;
+    }
+    el.innerHTML = res.files.map(f => `<div class="screen-wrap">
+        <img src="${API}/api/errors/${encodeURIComponent(f)}" onclick="window.open(this.src)">
+        <div class="screen-meta">${esc(f)}</div>
+    </div>`).join('');
 }
 
 loadStats();

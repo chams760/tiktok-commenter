@@ -153,6 +153,52 @@ async def api_cancel_task(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+async def api_screenshot(request):
+    try:
+        from tiktok_worker import take_debug_screenshot, get_all_active_tasks
+        data = await request.json()
+        task_id = data.get("task_id")
+        if task_id:
+            task_id = int(task_id)
+
+        active = get_all_active_tasks()
+        if not active:
+            return web.json_response({"error": "no active browser sessions"}, status=404)
+
+        if task_id is None:
+            task_id = active[0]
+
+        path = await take_debug_screenshot(task_id)
+        if path and os.path.exists(path):
+            return web.FileResponse(path, headers={"Content-Type": "image/png"})
+        return web.json_response({"error": "screenshot failed, browser may be between pages"}, status=404)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def api_errors(request):
+    screenshots_dir = os.path.join(os.path.dirname(__file__), "screenshots")
+    if not os.path.exists(screenshots_dir):
+        return web.json_response({"files": []})
+    files = sorted(
+        [f for f in os.listdir(screenshots_dir) if f.endswith(".png")],
+        key=lambda x: os.path.getmtime(os.path.join(screenshots_dir, x)),
+        reverse=True,
+    )
+    return web.json_response({"files": files[:10]})
+
+
+async def api_error_image(request):
+    name = request.match_info.get("name", "")
+    if "/" in name or ".." in name:
+        return web.json_response({"error": "invalid"}, status=400)
+    screenshots_dir = os.path.join(os.path.dirname(__file__), "screenshots")
+    path = os.path.join(screenshots_dir, name)
+    if os.path.exists(path) and name.endswith(".png"):
+        return web.FileResponse(path, headers={"Content-Type": "image/png"})
+    return web.json_response({"error": "not found"}, status=404)
+
+
 async def start_health_server():
     app = web.Application()
     app.router.add_get("/", webapp_handler)
@@ -160,6 +206,9 @@ async def start_health_server():
     app.router.add_get("/dashboard", dashboard_handler)
     app.router.add_get("/webapp", webapp_handler)
     app.router.add_get("/api/stats", api_stats)
+    app.router.add_post("/api/screenshot", api_screenshot)
+    app.router.add_get("/api/errors", api_errors)
+    app.router.add_get("/api/errors/{name}", api_error_image)
     app.router.add_post("/api/task", api_create_task)
     app.router.add_post("/api/accounts", api_upload_accounts)
     app.router.add_delete("/api/accounts", api_delete_accounts)
