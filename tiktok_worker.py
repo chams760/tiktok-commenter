@@ -50,13 +50,54 @@ async def _human_delay(min_ms=800, max_ms=2500):
     await asyncio.sleep(random.uniform(min_ms, max_ms) / 1000)
 
 
+async def _random_mouse_move(page: Page, steps=3):
+    vp = page.viewport_size or {"width": 1280, "height": 720}
+    for _ in range(steps):
+        x = random.randint(100, vp["width"] - 100)
+        y = random.randint(100, vp["height"] - 100)
+        await page.mouse.move(x, y, steps=random.randint(5, 15))
+        await asyncio.sleep(random.uniform(0.1, 0.4))
+
+
+async def _human_click(page: Page, selector: str):
+    el = page.locator(selector)
+    box = await el.bounding_box()
+    if box:
+        x = box["x"] + box["width"] * random.uniform(0.3, 0.7)
+        y = box["y"] + box["height"] * random.uniform(0.3, 0.7)
+        await page.mouse.move(x, y, steps=random.randint(8, 20))
+        await asyncio.sleep(random.uniform(0.05, 0.15))
+        await page.mouse.click(x, y)
+    else:
+        await el.click()
+
+
 async def _human_type(page: Page, selector: str, text: str):
     el = page.locator(selector)
-    await el.click()
+    await _human_click(page, selector)
     await _human_delay(300, 600)
     for char in text:
         await el.type(char, delay=random.randint(20, 60))
     await _human_delay(200, 500)
+
+
+async def _detect_captcha(page: Page) -> str | None:
+    checks = [
+        ('[class*="captcha"]', "CAPTCHA element detected"),
+        ('[id*="captcha"]', "CAPTCHA element detected"),
+        ('iframe[src*="captcha"]', "CAPTCHA iframe detected"),
+        ('[class*="Slider"]', "Slider puzzle detected"),
+        ('[class*="slider"]', "Slider puzzle detected"),
+        ('[class*="verify"]', "Verification challenge detected"),
+        ('[class*="Verify"]', "Verification challenge detected"),
+        ('[class*="puzzle"]', "Puzzle captcha detected"),
+        ('[class*="secsdk"]', "TikTok security SDK challenge detected"),
+    ]
+    for selector, msg in checks:
+        count = await page.locator(selector).count()
+        if count > 0:
+            return msg
+    return None
 
 
 _STEALTH_JS = """
@@ -253,7 +294,13 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
 
             await page.goto("https://www.tiktok.com/login/phone-or-email/email", wait_until="domcontentloaded")
             await _human_delay(3000, 5000)
+            await _random_mouse_move(page, steps=random.randint(2, 4))
             await snap(page, "login_page", "Login page loaded (stealth mode)")
+
+            captcha_pre = await _detect_captcha(page)
+            if captcha_pre:
+                await snap(page, "captcha_before_login", f"BLOCKED BEFORE LOGIN: {captcha_pre}")
+                return steps
 
             email_input = page.locator('input[name="username"]')
             count = await email_input.count()
@@ -261,6 +308,7 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
                 await snap(page, "no_email_field", "Email input not found on page")
                 return steps
 
+            await _random_mouse_move(page, 2)
             await _human_type(page, 'input[name="username"]', username)
             await snap(page, "email_filled", f"Email filled: {username}")
 
@@ -270,9 +318,11 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
                 await snap(page, "no_pass_field", "Password input not found")
                 return steps
 
+            await _random_mouse_move(page, 1)
             await _human_type(page, 'input[type="password"]', password)
             await snap(page, "password_filled", "Password filled")
 
+            await _random_mouse_move(page, 2)
             await _human_delay(500, 1200)
 
             login_btn = page.locator('button[data-e2e="login-button"]')
@@ -282,9 +332,15 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
                 await snap(page, "no_login_btn", f"Login button not found. Submit buttons on page: {all_buttons}")
                 return steps
 
-            await login_btn.click()
+            await _human_click(page, 'button[data-e2e="login-button"]')
             await _human_delay(3000, 5000)
             await snap(page, "after_click", "After clicking login button")
+
+            captcha_post = await _detect_captcha(page)
+            if captcha_post:
+                await snap(page, "captcha_after_click", f"CAPTCHA APPEARED: {captcha_post}")
+                await _human_delay(3000, 5000)
+                await snap(page, "captcha_wait", "Waiting for captcha timeout...")
 
             await _human_delay(5000, 8000)
             await snap(page, "final_state", f"Final URL: {page.url}")
@@ -293,15 +349,18 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
                 steps[-1]["note"] = "LOGIN SUCCESS - redirected away from login page"
                 await _save_cookies(ctx, username)
             else:
-                captcha = await page.locator('[class*="captcha"], [id*="captcha"], iframe[src*="captcha"]').count()
+                captcha_detail = await _detect_captcha(page)
                 error_el = await page.locator('[class*="error"], [class*="Error"]').count()
+                page_text = await page.locator("body").inner_text()
                 note = "LOGIN FAILED - still on login page."
-                if captcha > 0:
-                    note += " CAPTCHA detected!"
+                if captcha_detail:
+                    note += f" {captcha_detail}"
+                if "maximum" in page_text.lower() or "too many" in page_text.lower():
+                    note += " RATE LIMITED: Too many attempts. Wait 1-2 hours."
                 if error_el > 0:
                     try:
                         err_text = await page.locator('[class*="error"], [class*="Error"]').first.text_content()
-                        note += f" Error text: {err_text}"
+                        note += f" Error: {err_text}"
                     except Exception:
                         note += " Error element found."
                 steps[-1]["note"] = note
@@ -328,22 +387,36 @@ async def login_account(ctx: BrowserContext, page: Page, username: str, password
 
         await page.goto("https://www.tiktok.com/login/phone-or-email/email", wait_until="domcontentloaded")
         await _human_delay(3000, 5000)
+        await _random_mouse_move(page, random.randint(2, 4))
 
+        await _random_mouse_move(page, 2)
         await _human_type(page, 'input[name="username"]', username)
+        await _random_mouse_move(page, 1)
         await _human_type(page, 'input[type="password"]', password)
+        await _random_mouse_move(page, 2)
         await _human_delay(500, 1200)
 
-        login_btn = page.locator('button[data-e2e="login-button"]')
-        await login_btn.click()
+        await _human_click(page, 'button[data-e2e="login-button"]')
 
         await _human_delay(5000, 8000)
+
+        captcha = await _detect_captcha(page)
+        if captcha:
+            logger.warning(f"Капча при входе {username}: {captcha}")
+            await _human_delay(5000, 8000)
 
         if "login" not in page.url.lower():
             logger.info(f"Вход выполнен: {username}")
             await _save_cookies(ctx, username)
             return True
 
-        logger.warning(f"Не удалось войти: {username}")
+        body_text = await page.locator("body").inner_text()
+        if "maximum" in body_text.lower() or "too many" in body_text.lower():
+            logger.error(f"Rate limit для {username} — слишком много попыток")
+        elif captcha:
+            logger.error(f"Вход заблокирован капчей для {username}")
+        else:
+            logger.warning(f"Не удалось войти: {username}")
         return False
     except Exception as e:
         logger.error(f"Ошибка входа {username}: {e}")
