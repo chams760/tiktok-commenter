@@ -153,6 +153,30 @@ async def api_cancel_task(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+async def api_test_login(request):
+    try:
+        import database as db
+        from tiktok_worker import test_login
+        data = await request.json()
+        account_id = data.get("account_id")
+        if account_id:
+            accounts = await db.get_accounts()
+            acc = next((a for a in accounts if a["id"] == int(account_id)), None)
+            if not acc:
+                return web.json_response({"error": "account not found"}, status=404)
+            username, password = acc["username"], acc["password"]
+        else:
+            username = data.get("username", "").strip()
+            password = data.get("password", "").strip()
+        if not username or not password:
+            return web.json_response({"error": "username and password required"}, status=400)
+        steps = await test_login(username, password)
+        return web.json_response({"ok": True, "steps": steps, "username": username})
+    except Exception as e:
+        logger.error(f"Test login error: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def api_screenshot(request):
     try:
         from tiktok_worker import take_debug_screenshot, get_all_active_tasks
@@ -206,6 +230,7 @@ async def start_health_server():
     app.router.add_get("/dashboard", dashboard_handler)
     app.router.add_get("/webapp", webapp_handler)
     app.router.add_get("/api/stats", api_stats)
+    app.router.add_post("/api/test-login", api_test_login)
     app.router.add_post("/api/screenshot", api_screenshot)
     app.router.add_get("/api/errors", api_errors)
     app.router.add_get("/api/errors/{name}", api_error_image)

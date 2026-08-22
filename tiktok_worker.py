@@ -42,6 +42,90 @@ async def take_debug_screenshot(task_id: int | None = None) -> str | None:
     return None
 
 
+async def test_login(username: str, password: str) -> list[dict]:
+    steps = []
+    ts = int(datetime.now(timezone.utc).timestamp())
+
+    async def snap(page: Page, step_name: str, note: str = ""):
+        fname = f"test_{ts}_{len(steps)}_{step_name}.png"
+        path = os.path.join(SCREENSHOTS_DIR, fname)
+        try:
+            await page.screenshot(path=path, full_page=False)
+        except Exception:
+            pass
+        steps.append({"step": step_name, "file": fname, "note": note, "url": page.url})
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        ctx = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080},
+        )
+        page = await ctx.new_page()
+
+        try:
+            await page.goto("https://www.tiktok.com/login/phone-or-email/email")
+            await page.wait_for_timeout(4000)
+            await snap(page, "login_page", "Login page loaded")
+
+            email_input = page.locator('input[name="username"]')
+            count = await email_input.count()
+            if count == 0:
+                await snap(page, "no_email_field", "Email input not found on page")
+                return steps
+
+            await email_input.fill(username)
+            await page.wait_for_timeout(500)
+            await snap(page, "email_filled", f"Email filled: {username}")
+
+            pass_input = page.locator('input[type="password"]')
+            count = await pass_input.count()
+            if count == 0:
+                await snap(page, "no_pass_field", "Password input not found")
+                return steps
+
+            await pass_input.fill(password)
+            await page.wait_for_timeout(500)
+            await snap(page, "password_filled", "Password filled")
+
+            login_btn = page.locator('button[data-e2e="login-button"]')
+            count = await login_btn.count()
+            if count == 0:
+                all_buttons = await page.locator('button[type="submit"]').count()
+                await snap(page, "no_login_btn", f"Login button not found. Submit buttons on page: {all_buttons}")
+                return steps
+
+            await login_btn.click()
+            await page.wait_for_timeout(3000)
+            await snap(page, "after_click", "After clicking login button")
+
+            await page.wait_for_timeout(5000)
+            await snap(page, "final_state", f"Final URL: {page.url}")
+
+            if "login" not in page.url.lower():
+                steps[-1]["note"] = "LOGIN SUCCESS - redirected away from login page"
+            else:
+                captcha = await page.locator('[class*="captcha"], [id*="captcha"], iframe[src*="captcha"]').count()
+                error_el = await page.locator('[class*="error"], [class*="Error"]').count()
+                note = "LOGIN FAILED - still on login page."
+                if captcha > 0:
+                    note += " CAPTCHA detected!"
+                if error_el > 0:
+                    try:
+                        err_text = await page.locator('[class*="error"], [class*="Error"]').first.text_content()
+                        note += f" Error text: {err_text}"
+                    except Exception:
+                        note += " Error element found."
+                steps[-1]["note"] = note
+
+        except Exception as e:
+            await snap(page, "exception", f"Error: {str(e)}")
+        finally:
+            await browser.close()
+
+    return steps
+
+
 async def login_account(page: Page, username: str, password: str) -> bool:
     try:
         await page.goto("https://www.tiktok.com/login/phone-or-email/email")

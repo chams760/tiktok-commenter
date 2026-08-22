@@ -369,19 +369,39 @@
 
 <!-- ── Debug ── -->
 <div id="panel-debug" class="panel">
-    <div class="section-label">Live screenshot</div>
+
+    <div class="section-label">Test account login</div>
+    <div class="card" style="margin-bottom:12px;">
+        <div style="font-size:13px;color:var(--text-2);margin-bottom:12px;">Opens a browser, tries to log in, and takes screenshots at every step so you can see exactly what happens.</div>
+        <div id="test-login-picker"></div>
+        <div class="sep"><span>or enter manually</span></div>
+        <div class="field" style="margin-bottom:8px;">
+            <input type="text" id="test-user" placeholder="login / email">
+        </div>
+        <div class="field" style="margin-bottom:0;">
+            <input type="text" id="test-pass" placeholder="password">
+        </div>
+    </div>
+    <button class="btn btn-primary" id="btn-test" onclick="testLogin()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+        Test login
+    </button>
+
+    <div id="test-results" style="margin-top:16px;"></div>
+
+    <div class="section-label" style="margin-top:24px;">Live screenshot</div>
     <div id="live-screen" class="screen-wrap">
         <div class="screen-placeholder">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-            <span>Press the button to capture</span>
+            <span>Capture running task browser</span>
         </div>
     </div>
-    <button class="btn btn-primary" id="btn-screen" onclick="takeScreenshot()">
+    <button class="btn btn-secondary" id="btn-screen" onclick="takeScreenshot()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-        Take screenshot
+        Capture running task
     </button>
 
-    <div class="section-label" style="margin-top:24px;">Error screenshots</div>
+    <div class="section-label" style="margin-top:24px;">Error history</div>
     <div id="error-screens"></div>
     <button class="btn btn-secondary" onclick="loadErrors()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
@@ -427,6 +447,8 @@ function showTab(name, el) {
     document.getElementById('panel-' + name).classList.add('active');
     if (el) el.classList.add('active');
     if (name === 'dashboard') loadStats();
+    if (name === 'debug') loadAccountPicker();
+    if (name === 'accounts') loadStats();
 }
 
 function toast(text, type) {
@@ -607,6 +629,96 @@ async function takeScreenshot() {
     }
     btn.disabled = false;
     btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg> Take screenshot';
+}
+
+let _cachedAccounts = [];
+
+async function loadAccountPicker() {
+    const data = await api('GET', '/api/stats');
+    if (data.error || !data.accounts) return;
+    _cachedAccounts = data.accounts;
+    const el = document.getElementById('test-login-picker');
+    if (!data.accounts.length) {
+        el.innerHTML = '<div style="font-size:13px;color:var(--text-3);">No accounts loaded. Add them in the Accounts tab or enter manually below.</div>';
+        return;
+    }
+    el.innerHTML = '<div class="field-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg> Pick an account</div>' +
+        data.accounts.map(a =>
+            `<div class="acc-item" style="cursor:pointer;" onclick="pickAccount(${a.id},'${esc(a.username)}')">
+                <div><div class="acc-name">${esc(a.username)}</div><div class="acc-meta">status: ${a.status}</div></div>
+                <span class="badge ${a.status==='active'?'badge-ok':'badge-err'}">${a.status}</span>
+            </div>`
+        ).join('');
+}
+
+function pickAccount(id, name) {
+    document.getElementById('test-user').value = '';
+    document.getElementById('test-pass').value = '';
+    document.getElementById('test-user').dataset.accountId = id;
+    document.querySelectorAll('#test-login-picker .acc-item').forEach(el => el.style.background = '');
+    event.currentTarget.style.background = 'var(--accent-dim)';
+    toast('Selected: ' + name, 'success');
+}
+
+async function testLogin() {
+    const btn = document.getElementById('btn-test');
+    const results = document.getElementById('test-results');
+    const manualUser = document.getElementById('test-user').value.trim();
+    const manualPass = document.getElementById('test-pass').value.trim();
+    const accountId = document.getElementById('test-user').dataset.accountId;
+
+    let body = {};
+    if (manualUser && manualPass) {
+        body = { username: manualUser, password: manualPass };
+    } else if (accountId) {
+        body = { account_id: parseInt(accountId) };
+    } else {
+        toast('Select an account or enter credentials', 'error');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Testing login... (15-20 sec)';
+    results.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-3);"><span class="spinner" style="width:24px;height:24px;border-width:3px;"></span><div style="margin-top:12px;font-size:13px;">Browser is opening TikTok login page...</div></div>';
+
+    try {
+        const res = await fetch(API + '/api/test-login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (data.error) {
+            toast(data.error, 'error');
+            results.innerHTML = `<div class="card" style="color:var(--accent);">${esc(data.error)}</div>`;
+        } else if (data.steps) {
+            results.innerHTML = '<div class="section-label">Login steps (' + data.steps.length + ')</div>' +
+                data.steps.map((s, i) => {
+                    const isSuccess = s.note && s.note.includes('SUCCESS');
+                    const isError = s.note && (s.note.includes('FAILED') || s.note.includes('not found') || s.note.includes('CAPTCHA') || s.note.includes('Error'));
+                    const borderColor = isSuccess ? 'var(--green)' : isError ? 'var(--accent)' : 'var(--border)';
+                    return `<div class="screen-wrap" style="border-color:${borderColor};">
+                        <img src="${API}/api/errors/${encodeURIComponent(s.file)}" onclick="window.open(this.src)" onerror="this.style.display='none'">
+                        <div class="screen-meta" style="color:${isSuccess?'var(--green)':isError?'var(--accent)':'var(--text-2)'};">
+                            <strong>Step ${i+1}: ${esc(s.step)}</strong><br>${esc(s.note || '')}
+                        </div>
+                    </div>`;
+                }).join('');
+            const lastStep = data.steps[data.steps.length - 1];
+            if (lastStep.note && lastStep.note.includes('SUCCESS')) {
+                toast('Login successful!', 'success');
+            } else {
+                toast('Login failed - check screenshots', 'error');
+            }
+        }
+    } catch (e) {
+        toast('Connection error', 'error');
+        results.innerHTML = '';
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg> Test login';
+    document.getElementById('test-user').dataset.accountId = '';
 }
 
 async function loadErrors() {
