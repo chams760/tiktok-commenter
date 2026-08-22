@@ -336,7 +336,8 @@ async def start_bot():
             await msg.answer(f"Ошибка: {e}")
 
     logger.info("Бот запущен, начинаю polling...")
-    await dp.start_polling(bot)
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 
 async def main():
