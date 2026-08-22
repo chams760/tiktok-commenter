@@ -29,7 +29,16 @@ os.makedirs(SESSIONS_DIR, exist_ok=True)
 _executor = ThreadPoolExecutor(max_workers=3)
 _active_drivers: dict[int, webdriver.Chrome] = {}
 
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+def _detect_chrome_version() -> str:
+    try:
+        out = subprocess.check_output(["google-chrome-stable", "--version"], text=True)
+        ver = out.strip().split()[-1]
+        return ver
+    except Exception:
+        return "126.0.0.0"
+
+_CHROME_VER = _detect_chrome_version()
+UA = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{_CHROME_VER} Safari/537.36"
 
 _pending_verification: dict[str, dict] = {}
 
@@ -190,7 +199,7 @@ try {
 
 // Headless detection bypass
 Object.defineProperty(navigator, 'vendor', {get: () => 'Google Inc.'});
-Object.defineProperty(navigator, 'appVersion', {get: () => '5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'});
+Object.defineProperty(navigator, 'appVersion', {get: () => navigator.userAgent.replace('Mozilla/', '')});
 
 // Screen properties for headless
 Object.defineProperty(screen, 'colorDepth', {get: () => 24});
