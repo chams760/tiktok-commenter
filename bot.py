@@ -155,8 +155,9 @@ async def api_cancel_task(request):
 
 async def start_health_server():
     app = web.Application()
-    app.router.add_get("/", dashboard_handler)
+    app.router.add_get("/", webapp_handler)
     app.router.add_get("/health", health_handler)
+    app.router.add_get("/dashboard", dashboard_handler)
     app.router.add_get("/webapp", webapp_handler)
     app.router.add_get("/api/stats", api_stats)
     app.router.add_post("/api/task", api_create_task)
