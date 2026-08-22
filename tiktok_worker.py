@@ -1051,44 +1051,87 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         _human_type(email_input, username)
         _human_delay(0.3, 0.5)
 
-        pass_input = None
-        for sel in [
-            'input[type="password"]',
-            'input[name="password"]',
-            'input[placeholder*="assword" i]',
-            'input[autocomplete="current-password"]',
-        ]:
+        def _find_pass_input():
+            for sel in [
+                'input[type="password"]',
+                'input[name="password"]',
+                'input[placeholder*="assword" i]',
+                'input[autocomplete="current-password"]',
+            ]:
+                try:
+                    el = driver.find_element(By.CSS_SELECTOR, sel)
+                    if el and el.is_displayed():
+                        return el
+                except Exception:
+                    continue
+            # JS fallback: second visible input
             try:
-                pass_input = driver.find_element(By.CSS_SELECTOR, sel)
-                if pass_input:
-                    break
+                inputs = driver.find_elements(By.CSS_SELECTOR, 'input')
+                visible = [i for i in inputs if i.is_displayed() and i.get_attribute("type") != "hidden"]
+                if len(visible) >= 2:
+                    return visible[1]
             except Exception:
-                continue
+                pass
+            return None
+
+        pass_input = _find_pass_input()
+
+        # Two-step login: password might appear after clicking Next/Continue
         if not pass_input:
-            # JS fallback: find second visible input or any password-like input
+            step("no_pass_yet", "Password not visible, looking for Next button (two-step login)...")
             try:
-                pass_input_data = driver.execute_script("""
+                next_clicked = driver.execute_script("""
+                    var btns = document.querySelectorAll('button, div[role="button"], a');
+                    for (var i = 0; i < btns.length; i++) {
+                        var t = (btns[i].innerText || '').trim().toLowerCase();
+                        if ((t === 'next' || t === 'continue' || t === 'далее' || t === 'продолжить'
+                             || t === 'log in with password' || t === 'log in'
+                             || t.match(/^(next|continue|submit)$/i))
+                            && btns[i].offsetHeight > 0) {
+                            btns[i].click();
+                            return 'clicked:' + t;
+                        }
+                    }
+                    // Also try links with "password" text
+                    var links = document.querySelectorAll('a, span, div, p');
+                    for (var j = 0; j < links.length; j++) {
+                        var lt = (links[j].innerText || '').trim().toLowerCase();
+                        if ((lt.includes('password') || lt.includes('пароль'))
+                            && lt.length < 40 && links[j].offsetHeight > 0) {
+                            links[j].click();
+                            return 'clicked_link:' + lt;
+                        }
+                    }
+                    return 'not_found';
+                """)
+                step("next_btn", f"Next/password button: {next_clicked}")
+                if next_clicked and next_clicked.startswith("clicked"):
+                    time.sleep(3)
+                    pass_input = _find_pass_input()
+                    if pass_input:
+                        step("pass_appeared", "Password input appeared after clicking Next")
+            except Exception as e:
+                step("next_btn_error", str(e))
+
+        if not pass_input:
+            # Log what's visible for debugging
+            try:
+                vis_data = driver.execute_script("""
                     var inputs = document.querySelectorAll('input');
                     var visible = [];
                     for (var i = 0; i < inputs.length; i++) {
                         if (inputs[i].offsetHeight > 0 && inputs[i].type !== 'hidden') {
-                            visible.push({idx: i, type: inputs[i].type, name: inputs[i].name, ph: inputs[i].placeholder});
+                            visible.push({type: inputs[i].type, name: inputs[i].name, ph: inputs[i].placeholder});
                         }
                     }
                     return JSON.stringify(visible);
                 """)
-                step("pass_scan", f"Visible inputs: {pass_input_data}")
-                # Try getting second visible input as password
-                inputs = driver.find_elements(By.CSS_SELECTOR, 'input')
-                visible_inputs = [i for i in inputs if i.is_displayed() and i.get_attribute("type") != "hidden"]
-                if len(visible_inputs) >= 2:
-                    pass_input = visible_inputs[1]
-                    step("pass_fallback", "Using second visible input as password field")
+                step("pass_scan", f"Visible inputs: {vis_data}")
             except Exception:
                 pass
-        if not pass_input:
+            body_text = driver.find_element(By.TAG_NAME, "body").text
             snap(driver, "no_pass_field")
-            step("error", "Password input not found")
+            step("error", f"Password input not found. Body: {body_text[:300]}")
             driver.quit()
             return {"ok": False, "steps": steps, "error": "Password input not found"}
 
