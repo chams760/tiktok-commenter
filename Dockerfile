@@ -1,9 +1,16 @@
 FROM python:3.12-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    curl \
+    unzip \
+    gnupg \
+    ca-certificates \
+    fonts-noto-cjk \
+    fonts-freefont-ttf \
+    fonts-unifont \
     libnss3 \
     libnspr4 \
     libdbus-1-3 \
@@ -23,24 +30,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libatspi2.0-0 \
     libwayland-client0 \
     libglib2.0-0 \
-    fonts-noto-cjk \
-    fonts-freefont-ttf \
-    fonts-unifont \
-    wget \
-    ca-certificates \
     libgtk-3-0 \
     libgdk-pixbuf2.0-0 \
     libxcursor1 \
-    libdbus-glib-1-2 \
     libx11-xcb1 \
+    xdg-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends /tmp/chrome.deb \
+    && rm /tmp/chrome.deb \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-RUN playwright install chromium
 
 COPY . .
 
