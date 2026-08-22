@@ -864,14 +864,35 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         step("login_page", "Login page loaded")
 
         # Step 3: Fill credentials
-        try:
-            email_input = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="username"]'))
-            )
-        except Exception:
-            step("error", "Email input not found")
+        email_input = None
+        for selector in [
+            'input[name="username"]',
+            'input[placeholder*="email" i]',
+            'input[placeholder*="Email" i]',
+            'input[placeholder*="phone" i]',
+            'input[type="text"]',
+            'input[type="email"]',
+        ]:
+            try:
+                email_input = WebDriverWait(driver, 5).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                )
+                if email_input:
+                    step("input_found", f"Email input found via: {selector}")
+                    break
+            except Exception:
+                continue
+
+        if not email_input:
+            body_text = ""
+            try:
+                body_text = driver.find_element(By.TAG_NAME, "body").text[:500]
+            except Exception:
+                pass
+            snap(driver, "no_email_input")
+            step("error", f"Email input not found. URL: {driver.current_url} | Body: {body_text}")
             driver.quit()
-            return {"ok": False, "steps": steps, "error": "Email input not found"}
+            return {"ok": False, "steps": steps, "error": f"Email input not found. Page: {body_text[:200]}"}
 
         ActionChains(driver).move_to_element(email_input).click().perform()
         _human_delay(0.2, 0.4)
