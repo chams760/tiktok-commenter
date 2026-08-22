@@ -218,8 +218,6 @@ async def api_login(request):
 
         if not username:
             return web.json_response({"error": "username required"}, status=400)
-        if not email_password:
-            return web.json_response({"error": "email_password required for auto-login"}, status=400)
 
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
@@ -228,6 +226,22 @@ async def api_login(request):
         return web.json_response(result)
     except Exception as e:
         logger.error(f"API login error: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def api_submit_code(request):
+    try:
+        from tiktok_api import api_submit_code as do_submit
+        data = await request.json()
+        username = data.get("username", "").strip()
+        code = data.get("code", "").strip()
+        if not username or not code:
+            return web.json_response({"error": "username and code required"}, status=400)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, do_submit, username, code)
+        return web.json_response(result)
+    except Exception as e:
+        logger.error(f"Submit code error: {e}")
         return web.json_response({"error": str(e)}, status=500)
 
 
@@ -357,6 +371,7 @@ async def start_health_server():
     app.router.add_post("/api/import-cookies", api_import_cookies)
     app.router.add_post("/api/verify-code", api_verify_code)
     app.router.add_post("/api/login", api_login)
+    app.router.add_post("/api/submit-code", api_submit_code)
     port = int(os.environ.get("PORT", 8080))
     runner = web.AppRunner(app)
     await runner.setup()

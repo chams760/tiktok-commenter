@@ -138,6 +138,9 @@ def fetch_code_from_imap(email_addr: str, email_pass: str, imap_server: str = ""
     return None
 
 
+_pending_api_sessions: dict[str, dict] = {}
+
+
 def _get_csrf(session) -> str:
     for c in session.cookies:
         if c.name == "tt_csrf_token":
@@ -305,8 +308,9 @@ def api_login(username: str, password: str, email_pass: str = "",
             return {"ok": False, "steps": steps, "error": "All login methods failed"}
 
     if not email_pass:
-        step("need_email_pass", "Code sent but no email password for IMAP auto-read")
-        return {"ok": False, "steps": steps, "need_code": True}
+        step("waiting_for_code", "Code request sent. Enter the code manually.")
+        _pending_api_sessions[username] = {"session": session, "steps": steps}
+        return {"ok": False, "steps": steps, "need_code": True, "username": username}
 
     step("imap_waiting", f"Waiting for code via IMAP ({_get_imap_server(username)})...")
     code = fetch_code_from_imap(username, email_pass, imap_server, timeout=90)
@@ -354,3 +358,56 @@ def api_login(username: str, password: str, email_pass: str = "",
 
     step("login_failed", "Could not complete login with the code")
     return {"ok": False, "steps": steps, "error": "Login with code failed"}
+
+
+def api_submit_code(username: str, code: str) -> dict:
+    pending = _pending_api_sessions.pop(username, None)
+    if not pending:
+        return {"ok": False, "error": f"No pending session for {username}. Run login first."}
+
+    session = pending["session"]
+    steps = pending["steps"]
+
+    def step(name, note=""):
+        steps.append({"step": name, "note": note})
+        logger.info(f"API submit code [{name}]: {note}")
+
+    step("manual_code", f"Code entered: {code}")
+
+    verify_endpoints = [
+        "https://www.tiktok.com/passport/web/user/login/",
+        "https://www.tiktok.com/passport/web/email/login/",
+        "https://www.tiktok.com/api/passport/web/user/login/",
+    ]
+    for url in verify_endpoints:
+        r = _post_api(session, url, {
+            "email": username,
+            "code": code,
+            "aid": "1459",
+            "mix_mode": 1,
+            "account_sdk_source": "web",
+            "service": "https://www.tiktok.com",
+        }, step, "login_with_code")
+        if r and r.get("success"):
+            _save_api_cookies(session, username)
+            step("login_success", f"Login successful! Cookies: {list(session.cookies.keys())}")
+            return {"ok": True, "steps": steps}
+
+    verify_code_endpoints = [
+        "https://www.tiktok.com/passport/web/verify_code/",
+        "https://www.tiktok.com/api/passport/web/verify_code/",
+    ]
+    for url in verify_code_endpoints:
+        r = _post_api(session, url, {
+            "email": username,
+            "code": code,
+            "aid": "1459",
+            "account_sdk_source": "web",
+        }, step, "verify_code")
+        if r and r.get("success"):
+            _save_api_cookies(session, username)
+            step("login_success", f"Verification successful! Cookies: {list(session.cookies.keys())}")
+            return {"ok": True, "steps": steps}
+
+    step("verify_failed", "Code verification failed")
+    return {"ok": False, "steps": steps, "error": "Code verification failed"}

@@ -386,7 +386,7 @@
             <input type="text" id="api-pass" placeholder="TikTok password">
         </div>
         <div class="field" style="margin-bottom:8px;">
-            <input type="text" id="api-email-pass" placeholder="Email password (for IMAP — to read verification code)">
+            <input type="text" id="api-email-pass" placeholder="Email password (optional — for auto IMAP code read)">
         </div>
         <div class="field" style="margin-bottom:8px;">
             <input type="text" id="api-imap" placeholder="IMAP server (auto-detect for gmail, outlook, mail.ru, yandex)">
@@ -675,8 +675,6 @@ async function apiLogin() {
     const imapServer = document.getElementById('api-imap').value.trim();
     const proxy = document.getElementById('api-proxy').value.trim();
 
-    if (!emailPass) { toast('Email password is required for IMAP', 'error'); return; }
-
     let body = {};
     if (accountId && !manualUser) {
         body = { account_id: parseInt(accountId), email_password: emailPass, imap_server: imapServer, proxy };
@@ -714,10 +712,24 @@ async function apiLogin() {
 
         if (data.ok) {
             toast('Login successful! Cookies saved.', 'success');
+        } else if (data.need_code) {
+            const verifyUser = data.username || manualUser || '';
+            results.innerHTML += `
+            <div class="card" style="border-color:var(--yellow);margin-top:12px;">
+                <div style="font-size:14px;font-weight:600;color:var(--yellow);margin-bottom:8px;">Enter verification code</div>
+                <div style="font-size:13px;color:var(--text-2);margin-bottom:12px;">Check your email for the TikTok code and enter it below:</div>
+                <div class="field" style="margin-bottom:10px;">
+                    <input type="text" id="api-verify-code" placeholder="Enter code" maxlength="10" style="text-align:center;font-size:20px;letter-spacing:6px;font-weight:700;">
+                </div>
+                <input type="hidden" id="api-verify-username" value="${esc(verifyUser)}">
+                <button class="btn btn-primary" id="btn-api-verify" onclick="apiSubmitCode()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    Submit Code
+                </button>
+            </div>`;
+            toast('Enter the verification code from your email', 'success');
         } else if (data.error) {
             toast(data.error, 'error');
-        } else if (data.need_code) {
-            toast('Code sent but no IMAP access — enter code manually', 'error');
         }
     } catch (e) {
         toast('Connection error', 'error');
@@ -727,6 +739,51 @@ async function apiLogin() {
     btn.disabled = false;
     btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg> Auto Login';
     document.getElementById('api-user').dataset.accountId = '';
+}
+
+async function apiSubmitCode() {
+    const code = document.getElementById('api-verify-code').value.trim();
+    const username = document.getElementById('api-verify-username').value;
+    if (!code) { toast('Enter the code', 'error'); return; }
+
+    const btn = document.getElementById('btn-api-verify');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Verifying...';
+
+    try {
+        const res = await fetch(API + '/api/submit-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, code })
+        });
+        const data = await res.json();
+        const results = document.getElementById('api-login-results');
+
+        if (data.steps) {
+            const newSteps = data.steps.filter(s => s.step.startsWith('manual_') || s.step.startsWith('login_') || s.step.startsWith('verify_'));
+            results.innerHTML += '<div class="section-label" style="margin-top:12px;">Code verification</div>' +
+                newSteps.map((s, i) => {
+                    const isSuccess = s.note && s.note.toLowerCase().includes('success');
+                    const isError = s.note && (s.note.toLowerCase().includes('fail') || s.note.toLowerCase().includes('error'));
+                    const color = isSuccess ? 'var(--green)' : isError ? 'var(--accent)' : 'var(--text-2)';
+                    return `<div class="card" style="margin-bottom:6px;padding:10px 14px;border-color:${isSuccess?'var(--green)':isError?'var(--accent)':'var(--border)'};">
+                        <div style="font-size:12px;font-weight:600;color:${color};">${esc(s.step)}</div>
+                        <div style="font-size:11px;color:var(--text-3);margin-top:4px;word-break:break-all;">${esc(s.note || '')}</div>
+                    </div>`;
+                }).join('');
+        }
+
+        if (data.ok) {
+            toast('Login successful! Cookies saved.', 'success');
+        } else {
+            toast(data.error || 'Verification failed', 'error');
+        }
+    } catch (e) {
+        toast('Connection error', 'error');
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Submit Code';
 }
 
 async function importCookies() {
