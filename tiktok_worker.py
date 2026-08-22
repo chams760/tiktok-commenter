@@ -77,9 +77,37 @@ async def _detect_captcha(page: Page) -> str | None:
 
 
 _STEALTH_JS = """
-Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+Object.defineProperty(navigator, 'webdriver', {
+    get: () => undefined,
+    configurable: true,
+});
+delete navigator.__proto__.webdriver;
+
 Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
 Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 4});
+Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
+Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
+Object.defineProperty(navigator, 'maxTouchPoints', {get: () => 0});
+
+window.chrome = {
+    runtime: { onConnect: { addListener: () => {}, removeListener: () => {} } },
+    loadTimes: () => ({
+        commitLoadTime: Date.now() / 1000,
+        connectionInfo: 'h2',
+        finishDocumentLoadTime: Date.now() / 1000 + 0.1,
+        finishLoadTime: Date.now() / 1000 + 0.2,
+        firstPaintAfterLoadTime: 0,
+        firstPaintTime: Date.now() / 1000 + 0.05,
+        navigationType: 'Other',
+        npnNegotiatedProtocol: 'h2',
+        requestTime: Date.now() / 1000 - 0.3,
+        startLoadTime: Date.now() / 1000 - 0.2,
+        wasAlternateProtocolAvailable: false,
+        wasFetchedViaSpdy: true,
+        wasNpnNegotiated: true,
+    }),
+    csi: () => ({ pageT: Date.now(), startE: Date.now(), onloadT: Date.now() }),
+};
 
 if (window.navigator.permissions) {
     const originalQuery = window.navigator.permissions.query;
@@ -87,6 +115,30 @@ if (window.navigator.permissions) {
         parameters.name === 'notifications'
             ? Promise.resolve({ state: Notification.permission })
             : originalQuery(parameters);
+}
+
+const origGetParameter = WebGLRenderingContext.prototype.getParameter;
+WebGLRenderingContext.prototype.getParameter = function(param) {
+    if (param === 37445) return 'Intel Inc.';
+    if (param === 37446) return 'Intel Iris OpenGL Engine';
+    return origGetParameter.call(this, param);
+};
+
+Object.defineProperty(navigator, 'plugins', {
+    get: () => {
+        const plugins = [
+            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+            { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+        ];
+        plugins.length = 3;
+        return plugins;
+    },
+});
+
+const originalCall = Function.prototype.call;
+function isNativeCheck(fn) {
+    return typeof fn === 'function' && /\\[native code\\]/.test(Function.prototype.toString.call(fn));
 }
 """
 
@@ -234,7 +286,13 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
     async with async_playwright() as pw:
         launch_opts = {
             "headless": True,
-            "args": ["--disable-blink-features=AutomationControlled"],
+            "args": [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--no-sandbox",
+                "--window-size=1280,720",
+            ],
+            "ignore_default_args": ["--enable-automation"],
         }
         if proxy_config:
             launch_opts["proxy"] = proxy_config
@@ -467,7 +525,12 @@ async def run_task(task_id: int):
         try:
             browser = await pw.chromium.launch(
                 headless=True,
-                args=["--disable-blink-features=AutomationControlled"],
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-infobars",
+                    "--no-sandbox",
+                ],
+                ignore_default_args=["--enable-automation"],
             )
             probe_ctx = await _create_stealth_context(browser)
             probe_page = await probe_ctx.new_page()
@@ -499,7 +562,12 @@ async def run_task(task_id: int):
                 proxy_config = parse_proxy(account.get("proxy", ""))
                 launch_opts = {
                     "headless": True,
-                    "args": ["--disable-blink-features=AutomationControlled"],
+                    "args": [
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-infobars",
+                        "--no-sandbox",
+                    ],
+                    "ignore_default_args": ["--enable-automation"],
                 }
                 if proxy_config:
                     launch_opts["proxy"] = proxy_config
