@@ -5,8 +5,53 @@ import os
 import re
 import time
 
-from curl_cffi import requests
+import requests as std_requests
 from loguru import logger
+
+try:
+    from curl_cffi import requests as cffi_requests
+    _HAS_CFFI = True
+except ImportError:
+    _HAS_CFFI = False
+    logger.warning("curl_cffi not available, using standard requests (no TLS impersonation)")
+
+_IMPERSONATE_OPTIONS = [
+    "chrome", "chrome120", "chrome119", "chrome116", "chrome110",
+    "chrome107", "chrome104", "chrome101", "chrome100", "chrome99",
+]
+
+
+def _create_session(proxy_url: str = ""):
+    if _HAS_CFFI:
+        for imp in _IMPERSONATE_OPTIONS:
+            try:
+                session = cffi_requests.Session(impersonate=imp)
+                if proxy_url:
+                    session.proxies = {"http": proxy_url, "https": proxy_url}
+                session.get("https://www.tiktok.com/robots.txt", timeout=10)
+                logger.info(f"curl_cffi session created with impersonate={imp}")
+                return session, imp
+            except Exception as e:
+                logger.debug(f"impersonate={imp} failed: {e}")
+                continue
+        logger.warning("All curl_cffi impersonate options failed, falling back to requests")
+
+    session = std_requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+    })
+    if proxy_url:
+        session.proxies = {"http": proxy_url, "https": proxy_url}
+    return session, "requests-fallback"
 
 SESSIONS_DIR = os.path.join(os.path.dirname(__file__), "sessions")
 os.makedirs(SESSIONS_DIR, exist_ok=True)
@@ -198,10 +243,7 @@ def api_login(username: str, password: str, email_pass: str = "",
         proxies = _parse_proxy_for_requests(proxy)
         proxy_url = proxies.get("https", proxies.get("http", ""))
 
-    session = requests.Session(impersonate="chrome126")
-    if proxy_url:
-        session.proxies = {"http": proxy_url, "https": proxy_url}
-
+    session, imp_name = _create_session(proxy_url)
     session.headers.update({
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
@@ -213,7 +255,7 @@ def api_login(username: str, password: str, email_pass: str = "",
         steps.append({"step": name, "note": note})
         logger.info(f"API login [{name}]: {note}")
 
-    step("init", f"Starting API login for {username} | proxy: {bool(proxy)}")
+    step("init", f"Starting API login for {username} | proxy: {bool(proxy)} | TLS: {imp_name}")
 
     try:
         resp = session.get("https://www.tiktok.com/", timeout=15)
