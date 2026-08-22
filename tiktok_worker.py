@@ -163,22 +163,28 @@ def parse_proxy(proxy_str: str) -> dict | None:
     if not proxy_str or not proxy_str.strip():
         return None
     p = proxy_str.strip()
-    if not p.startswith("http"):
-        p = "http://" + p
-    parts = p.replace("http://", "").replace("https://", "").replace("socks5://", "")
-    scheme = "socks5" if "socks5" in proxy_str else "http"
-    username = password = None
-    if "@" in parts:
-        auth, hostport = parts.rsplit("@", 1)
-        if ":" in auth:
-            username, password = auth.split(":", 1)
-    else:
-        hostport = parts
-    result = {"server": f"{scheme}://{hostport}"}
-    if username:
-        result["username"] = username
-        result["password"] = password
-    return result
+
+    scheme = "http"
+    if p.startswith("socks5://"):
+        scheme = "socks5"
+        p = p[len("socks5://"):]
+    elif p.startswith("http://"):
+        p = p[len("http://"):]
+    elif p.startswith("https://"):
+        p = p[len("https://"):]
+
+    if "@" in p:
+        auth, hostport = p.rsplit("@", 1)
+        username, password = auth.split(":", 1) if ":" in auth else (auth, None)
+        return {"server": f"{scheme}://{hostport}", "username": username, "password": password}
+
+    parts = p.split(":")
+    if len(parts) == 4:
+        username, password, host, port = parts
+        return {"server": f"{scheme}://{host}:{port}", "username": username, "password": password}
+    if len(parts) == 2:
+        return {"server": f"{scheme}://{p}"}
+    return {"server": f"{scheme}://{p}"}
 
 
 def get_active_page(task_id: int) -> Page | None:
