@@ -839,12 +839,29 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         has_cookies = _load_cookies(driver, username)
         if has_cookies:
             driver.get("https://www.tiktok.com/foryou")
-            time.sleep(3)
-            if "login" not in driver.current_url.lower():
-                step("cookie_login", "LOGIN SUCCESS via saved cookies!")
+            time.sleep(5)
+            body_text = ""
+            try:
+                body_text = driver.find_element(By.TAG_NAME, "body").text
+            except Exception:
+                pass
+            page_src_len = len(driver.page_source or "")
+            is_logged_in = (
+                "login" not in driver.current_url.lower()
+                and page_src_len > 1000
+                and ("following" in body_text.lower() or "for you" in body_text.lower()
+                     or "foryou" in driver.current_url.lower())
+            )
+            if is_logged_in:
+                step("cookie_login", f"LOGIN SUCCESS via saved cookies! URL: {driver.current_url}")
                 driver.quit()
                 return {"ok": True, "steps": steps}
-            step("cookies_expired", "Saved cookies expired")
+            step("cookies_expired", f"Cookies invalid. URL: {driver.current_url} | body: {len(body_text)} | src: {page_src_len}")
+            # Delete invalid cookies file
+            try:
+                os.remove(_session_path(username))
+            except Exception:
+                pass
 
         # Step 0: Verify proxy connectivity
         if proxy:
