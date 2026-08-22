@@ -37,11 +37,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
-RUN wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+# Install Chrome + matching chromedriver via Chrome for Testing (stable channel)
+RUN CHROME_URL="https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb" \
+    && wget -q -O /tmp/chrome.deb "$CHROME_URL" \
     && apt-get update \
     && apt-get install -y --no-install-recommends /tmp/chrome.deb \
     && rm /tmp/chrome.deb \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && CHROME_VERSION=$(google-chrome-stable --version | grep -oP '\d+\.\d+\.\d+\.\d+') \
+    && CHROME_MAJOR=$(echo "$CHROME_VERSION" | cut -d. -f1) \
+    && echo "Chrome version: $CHROME_VERSION (major: $CHROME_MAJOR)" \
+    && DRIVER_URL="https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip" \
+    && echo "Downloading chromedriver from: $DRIVER_URL" \
+    && wget -q -O /tmp/chromedriver.zip "$DRIVER_URL" \
+    && unzip -o /tmp/chromedriver.zip -d /tmp/ \
+    && mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver \
+    && chmod +x /usr/local/bin/chromedriver \
+    && rm -rf /tmp/chromedriver* \
+    && chromedriver --version
 
 WORKDIR /app
 

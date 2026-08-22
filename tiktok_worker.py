@@ -8,11 +8,13 @@ from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
 from loguru import logger
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-import undetected_chromedriver as uc
 
 import config
 import database as db
@@ -25,7 +27,7 @@ SESSIONS_DIR = os.path.join(os.path.dirname(__file__), "sessions")
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 
 _executor = ThreadPoolExecutor(max_workers=3)
-_active_drivers: dict[int, uc.Chrome] = {}
+_active_drivers: dict[int, webdriver.Chrome] = {}
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
@@ -37,7 +39,7 @@ def _session_path(username: str) -> str:
     return os.path.join(SESSIONS_DIR, f"{safe}.json")
 
 
-def _save_cookies(driver: uc.Chrome, username: str):
+def _save_cookies(driver: webdriver.Chrome, username: str):
     try:
         cookies = driver.get_cookies()
         with open(_session_path(username), "w") as f:
@@ -47,7 +49,7 @@ def _save_cookies(driver: uc.Chrome, username: str):
         logger.warning(f"Не удалось сохранить cookies {username}: {e}")
 
 
-def _load_cookies(driver: uc.Chrome, username: str) -> bool:
+def _load_cookies(driver: webdriver.Chrome, username: str) -> bool:
     path = _session_path(username)
     if not os.path.exists(path):
         return False
@@ -83,7 +85,7 @@ def _human_type(element, text):
     _human_delay(0.2, 0.5)
 
 
-def _random_mouse_move(driver: uc.Chrome, steps=3):
+def _random_mouse_move(driver: webdriver.Chrome, steps=3):
     actions = ActionChains(driver)
     for _ in range(steps):
         x = random.randint(-200, 200)
@@ -96,7 +98,7 @@ def _random_mouse_move(driver: uc.Chrome, steps=3):
     _human_delay(0.1, 0.3)
 
 
-def _dismiss_cookie_banner(driver: uc.Chrome):
+def _dismiss_cookie_banner(driver: webdriver.Chrome):
     try:
         xpaths = [
             '//button[contains(text(),"Decline optional")]',
@@ -185,8 +187,43 @@ try {
 """
 
 
-def _create_driver(proxy_str: str = "") -> uc.Chrome:
-    options = uc.ChromeOptions()
+def _make_proxy_auth_extension(host, port, username, password):
+    import zipfile
+    import tempfile
+    manifest = json.dumps({
+        "version": "1.0.0",
+        "manifest_version": 2,
+        "name": "Proxy Auth",
+        "permissions": ["proxy", "tabs", "unlimitedStorage", "storage",
+                        "<all_urls>", "webRequest", "webRequestBlocking"],
+        "background": {"scripts": ["background.js"]},
+        "minimum_chrome_version": "22.0.0"
+    })
+    background = f"""
+    var config = {{
+        mode: "fixed_servers",
+        rules: {{
+            singleProxy: {{scheme: "http", host: "{host}", port: parseInt({port})}},
+            bypassList: ["localhost"]
+        }}
+    }};
+    chrome.proxy.settings.set({{value: config, scope: "regular"}}, function(){{}});
+    function callbackFn(details) {{
+        return {{authCredentials: {{username: "{username}", password: "{password}"}}}};
+    }}
+    chrome.webRequest.onAuthRequired.addListener(callbackFn, {{urls: ["<all_urls>"]}}, ['blocking']);
+    """
+    ext_dir = tempfile.mkdtemp()
+    ext_path = os.path.join(ext_dir, "proxy_auth.zip")
+    with zipfile.ZipFile(ext_path, 'w') as zp:
+        zp.writestr("manifest.json", manifest)
+        zp.writestr("background.js", background)
+    return ext_path
+
+
+def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
+    options = ChromeOptions()
+    options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
@@ -197,29 +234,27 @@ def _create_driver(proxy_str: str = "") -> uc.Chrome:
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--disable-infobars")
     options.add_argument("--disable-popup-blocking")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
 
+    proxy_has_auth = False
     if proxy_str and proxy_str.strip():
         proxy = _parse_proxy_for_selenium(proxy_str)
         if proxy:
             options.add_argument(f"--proxy-server={proxy}")
+            proxy_has_auth = "://" in proxy and "@" in proxy
 
-    chrome_ver = None
-    try:
-        out = subprocess.check_output(["google-chrome-stable", "--version"], text=True)
-        chrome_ver = int(out.strip().split()[-1].split(".")[0])
-        logger.debug(f"Chrome version detected: {chrome_ver}")
-    except Exception:
-        pass
+    chrome_binary = None
+    for path in ["/usr/bin/google-chrome-stable", "/usr/bin/google-chrome", "/usr/bin/chromium"]:
+        if os.path.exists(path):
+            chrome_binary = path
+            break
+    if chrome_binary:
+        options.binary_location = chrome_binary
 
-    driver = uc.Chrome(
-        options=options,
-        headless=True,
-        use_subprocess=True,
-        version_main=chrome_ver,
-    )
+    driver = webdriver.Chrome(options=options)
     driver.set_window_size(1920, 1080)
 
-    # Apply selenium-stealth
     try:
         from selenium_stealth import stealth
         stealth(driver,
@@ -240,8 +275,32 @@ def _create_driver(proxy_str: str = "") -> uc.Chrome:
             except Exception:
                 pass
 
-    logger.info(f"Chrome driver created | proxy={bool(proxy_str)}")
+    logger.info(f"Chrome driver created | proxy={bool(proxy_str)} | auth={proxy_has_auth}")
     return driver
+
+
+def _parse_proxy_parts(proxy_str: str):
+    if not proxy_str or not proxy_str.strip():
+        return None
+    p = proxy_str.strip()
+    for prefix in ("socks5://", "http://", "https://"):
+        if p.startswith(prefix):
+            p = p[len(prefix):]
+            break
+    if "@" in p:
+        auth, hostport = p.rsplit("@", 1)
+        user, passw = auth.split(":", 1) if ":" in auth else (auth, "")
+        parts = hostport.split(":")
+        host = parts[0]
+        port = parts[1] if len(parts) > 1 else "80"
+        return host, port, user, passw
+    parts = p.split(":")
+    if len(parts) == 4:
+        user, passw, host, port = parts
+        return host, port, user, passw
+    if len(parts) == 2:
+        return parts[0], parts[1], "", ""
+    return p, "80", "", ""
 
 
 def _parse_proxy_for_selenium(proxy_str: str) -> str | None:
@@ -1092,7 +1151,7 @@ async def browser_submit_manual_code(username: str, code: str) -> dict:
     return await loop.run_in_executor(_executor, _browser_submit_manual_code_sync, username, code)
 
 
-def _login_account_sync(driver: uc.Chrome, username: str, password: str) -> bool:
+def _login_account_sync(driver: webdriver.Chrome, username: str, password: str) -> bool:
     import time
 
     has_cookies = _load_cookies(driver, username)
@@ -1152,7 +1211,7 @@ def _login_account_sync(driver: uc.Chrome, username: str, password: str) -> bool
         return False
 
 
-def _search_videos_sync(driver: uc.Chrome, query: str, max_results: int = 50) -> list[str]:
+def _search_videos_sync(driver: webdriver.Chrome, query: str, max_results: int = 50) -> list[str]:
     import time
     urls = []
     try:
@@ -1182,7 +1241,7 @@ def _search_videos_sync(driver: uc.Chrome, query: str, max_results: int = 50) ->
     return urls
 
 
-def _post_comment_sync(driver: uc.Chrome, video_url: str, comment_text: str) -> bool:
+def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: str) -> bool:
     import time
     try:
         driver.get(video_url)

@@ -1,9 +1,9 @@
 aiogram==3.15.0
 selenium>=4.25.0
-undetected-chromedriver>=3.5.5
 aiosqlite==0.20.0
 python-dotenv==1.0.1
 loguru==0.7.3
 requests==2.32.3
 curl_cffi==0.7.4
 selenium-stealth==1.0.6
+aiohttp>=3.9.0
