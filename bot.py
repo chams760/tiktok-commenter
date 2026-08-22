@@ -195,7 +195,7 @@ async def api_test_login(request):
 async def api_login(request):
     try:
         import database as db
-        from tiktok_api import api_login as do_api_login
+        from tiktok_worker import browser_fetch_login
         data = await request.json()
         account_id = data.get("account_id")
 
@@ -219,10 +219,7 @@ async def api_login(request):
         if not username:
             return web.json_response({"error": "username required"}, status=400)
 
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None, do_api_login, username, password, email_password, imap_server, proxy
-        )
+        result = await browser_fetch_login(username, password, proxy, email_password, imap_server)
         return web.json_response(result)
     except Exception as e:
         logger.error(f"API login error: {e}")
@@ -231,14 +228,13 @@ async def api_login(request):
 
 async def api_submit_code(request):
     try:
-        from tiktok_api import api_submit_code as do_submit
+        from tiktok_worker import browser_submit_manual_code
         data = await request.json()
         username = data.get("username", "").strip()
         code = data.get("code", "").strip()
         if not username or not code:
             return web.json_response({"error": "username and code required"}, status=400)
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, do_submit, username, code)
+        result = await browser_submit_manual_code(username, code)
         return web.json_response(result)
     except Exception as e:
         logger.error(f"Submit code error: {e}")

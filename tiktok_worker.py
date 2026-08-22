@@ -598,6 +598,417 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
     return await loop.run_in_executor(_executor, _test_login_sync, username, password, proxy)
 
 
+_pending_browser_sessions: dict[str, dict] = {}
+
+
+def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
+                               email_password: str = "", imap_server: str = "") -> dict:
+    """Login via real browser — click through TikTok's actual UI so their JS handles X-Bogus/captcha."""
+    steps = []
+    ts = int(datetime.now(timezone.utc).timestamp())
+
+    def step(name, note=""):
+        steps.append({"step": name, "note": note})
+        logger.info(f"BrowserLogin [{name}]: {note}")
+
+    def snap(driver, step_name):
+        fname = f"blogin_{ts}_{len(steps)}_{step_name}.png"
+        path = os.path.join(SCREENSHOTS_DIR, fname)
+        try:
+            driver.save_screenshot(path)
+        except Exception:
+            pass
+        return fname
+
+    driver = None
+    try:
+        driver = _create_driver(proxy)
+        step("init", f"Browser created | proxy: {bool(proxy)}")
+
+        # Check IP
+        try:
+            driver.get("https://api.ipify.org?format=json")
+            _human_delay(1, 2)
+            ip_text = driver.find_element(By.TAG_NAME, "body").text
+            step("ip", f"IP: {ip_text}")
+        except Exception:
+            step("ip", "Could not check IP")
+
+        # Check saved cookies first
+        has_cookies = _load_cookies(driver, username)
+        if has_cookies:
+            driver.get("https://www.tiktok.com/foryou")
+            _human_delay(3, 5)
+            if "login" not in driver.current_url.lower():
+                step("cookie_login", "LOGIN SUCCESS via saved cookies!")
+                driver.quit()
+                return {"ok": True, "steps": steps}
+            step("cookies_expired", "Saved cookies expired")
+
+        # Step 1: Warm up — visit homepage
+        driver.get("https://www.tiktok.com")
+        _human_delay(3, 5)
+        _dismiss_cookie_banner(driver)
+        _random_mouse_move(driver, 5)
+        _human_delay(1, 2)
+        step("homepage", "Homepage visited, cookies collected")
+
+        # Step 2: Go to login page
+        driver.get("https://www.tiktok.com/login/phone-or-email/email")
+        _human_delay(3, 5)
+        _dismiss_cookie_banner(driver)
+        _human_delay(1, 2)
+        _dismiss_cookie_banner(driver)
+        _random_mouse_move(driver, 3)
+        snap(driver, "login_page")
+        step("login_page", f"Login page loaded")
+
+        # Step 3: Fill credentials like a human
+        try:
+            email_input = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="username"]'))
+            )
+        except Exception:
+            step("error", "Email input not found")
+            driver.quit()
+            return {"ok": False, "steps": steps, "error": "Email input not found"}
+
+        _random_mouse_move(driver, 2)
+        ActionChains(driver).move_to_element(email_input).click().perform()
+        _human_delay(0.5, 1.0)
+        _human_type(email_input, username)
+        _human_delay(0.5, 1.0)
+
+        try:
+            pass_input = driver.find_element(By.CSS_SELECTOR, 'input[type="password"]')
+        except Exception:
+            step("error", "Password input not found")
+            driver.quit()
+            return {"ok": False, "steps": steps, "error": "Password input not found"}
+
+        _random_mouse_move(driver, 1)
+        ActionChains(driver).move_to_element(pass_input).click().perform()
+        _human_delay(0.3, 0.6)
+        _human_type(pass_input, password)
+        step("credentials", "Credentials filled")
+
+        # Step 4: Click login button
+        _random_mouse_move(driver, 2)
+        _human_delay(0.8, 1.5)
+        try:
+            login_btn = driver.find_element(By.CSS_SELECTOR, 'button[data-e2e="login-button"]')
+        except Exception:
+            step("error", "Login button not found")
+            driver.quit()
+            return {"ok": False, "steps": steps, "error": "Login button not found"}
+
+        ActionChains(driver).move_to_element(login_btn).click().perform()
+        _human_delay(5, 8)
+        _dismiss_cookie_banner(driver)
+        snap(driver, "after_login_click")
+
+        body_text = driver.find_element(By.TAG_NAME, "body").text
+        step("after_login", f"URL: {driver.current_url} | Body preview: {body_text[:200]}")
+
+        # Check: direct login success?
+        if "login" not in driver.current_url.lower() and "verify" not in body_text.lower():
+            _save_cookies(driver, username)
+            step("success", "Direct login success!")
+            driver.quit()
+            return {"ok": True, "steps": steps}
+
+        # Check: captcha on login page?
+        page_src = driver.page_source.lower()
+        if "captcha" in page_src or "puzzle" in page_src:
+            snap(driver, "captcha_detected")
+            step("captcha", "CAPTCHA detected on login page. Waiting 10s for manual solve or auto-dismiss...")
+            _human_delay(8, 12)
+            body_text = driver.find_element(By.TAG_NAME, "body").text
+            if "login" not in driver.current_url.lower():
+                _save_cookies(driver, username)
+                step("success", "Login success after captcha!")
+                driver.quit()
+                return {"ok": True, "steps": steps}
+
+        # Step 5: Handle verification page
+        if "verify" not in body_text.lower() and "code" not in body_text.lower():
+            snap(driver, "login_failed")
+            step("failed", f"Login failed, no verify page. Body: {body_text[:300]}")
+            driver.quit()
+            return {"ok": False, "steps": steps, "error": "Login failed"}
+
+        step("verify_page", "Verification page detected")
+        snap(driver, "verify_page")
+
+        # Save page HTML for debugging
+        try:
+            html_path = os.path.join(SCREENSHOTS_DIR, f"blogin_{ts}_verify.html")
+            with open(html_path, "w", encoding="utf-8") as hf:
+                hf.write(driver.page_source)
+        except Exception:
+            pass
+
+        # Step 6: Click Email verification option via UI
+        _dismiss_cookie_banner(driver)
+        _human_delay(1, 2)
+
+        email_clicked = driver.execute_script("""
+            function findAndClick() {
+                var allEls = document.querySelectorAll('div, span, p, a, button, label');
+                var candidates = [];
+                for (var i = 0; i < allEls.length; i++) {
+                    var el = allEls[i];
+                    if (el.offsetHeight === 0 || el.offsetWidth === 0) continue;
+                    var parent = el.closest('[class*="cookie"], [class*="consent"], [id*="cookie"]');
+                    if (parent) continue;
+
+                    var directText = '';
+                    for (var c = 0; c < el.childNodes.length; c++) {
+                        if (el.childNodes[c].nodeType === 3) directText += el.childNodes[c].textContent;
+                    }
+                    directText = directText.trim();
+
+                    if (directText.match(/\\*+.*@|@.*\\.(com|net|org|ru|mail)/i)) {
+                        candidates.push({el: el, priority: 1, text: directText});
+                    }
+                    else if (directText.match(/^e-?mail$/i)) {
+                        candidates.push({el: el, priority: 2, text: directText});
+                    }
+                    else if (directText.length < 50 && directText.match(/e-?mail/i)) {
+                        candidates.push({el: el, priority: 3, text: directText});
+                    }
+                }
+
+                if (candidates.length === 0) {
+                    var containers = document.querySelectorAll('[class*="verify"] div, [class*="channel"] div, [class*="option"] div');
+                    for (var j = 0; j < containers.length; j++) {
+                        var cel = containers[j];
+                        if (cel.offsetHeight === 0) continue;
+                        var ct = (cel.innerText || '').toLowerCase();
+                        if (ct.includes('mail') || ct.includes('@')) {
+                            candidates.push({el: cel, priority: 5, text: ct.substring(0, 50)});
+                        }
+                    }
+                }
+
+                if (candidates.length === 0) return 'not_found';
+                candidates.sort(function(a, b) { return a.priority - b.priority; });
+                var best = candidates[0];
+                best.el.click();
+                return 'clicked:' + best.text;
+            }
+            return findAndClick();
+        """)
+
+        step("email_option", f"Email click result: {email_clicked}")
+        if email_clicked and email_clicked.startswith("clicked:"):
+            _human_delay(2, 4)
+            snap(driver, "after_email_click")
+
+        # Step 7: Click "Send code" button if visible
+        _human_delay(1, 2)
+        send_result = driver.execute_script("""
+            var btns = document.querySelectorAll('button, div[role="button"], a[role="button"], [class*="send"], [class*="Send"]');
+            for (var i = 0; i < btns.length; i++) {
+                var t = (btns[i].innerText || '').trim().toLowerCase();
+                if (t.match(/send|отправить|get.*code|получить|request/i) && btns[i].offsetHeight > 0) {
+                    btns[i].click();
+                    return 'clicked:' + t;
+                }
+            }
+            // Also try any visible link-like text
+            var links = document.querySelectorAll('a, span[class*="link"], div[class*="link"]');
+            for (var j = 0; j < links.length; j++) {
+                var lt = (links[j].innerText || '').trim().toLowerCase();
+                if (lt.match(/send|code|verify|отправить/i) && links[j].offsetHeight > 0) {
+                    links[j].click();
+                    return 'clicked_link:' + lt;
+                }
+            }
+            return 'no_send_button';
+        """)
+
+        step("send_code_btn", f"Send button: {send_result}")
+        snap(driver, "after_send_click")
+
+        # Step 8: Wait a bit and check for captcha
+        _human_delay(2, 3)
+        page_src = driver.page_source.lower()
+        if "captcha" in page_src or "puzzle" in page_src or "slider" in page_src:
+            snap(driver, "captcha_verify")
+            step("captcha_verify", "CAPTCHA detected on verification. TikTok requires captcha before sending code.")
+            # Try to detect and log captcha details
+            captcha_info = driver.execute_script("""
+                var iframes = document.querySelectorAll('iframe');
+                var info = {iframes: iframes.length, classes: []};
+                document.querySelectorAll('[class*="captcha"], [class*="Captcha"], [id*="captcha"], [class*="verify-bar"]').forEach(function(el) {
+                    info.classes.push(el.className || el.id);
+                });
+                return JSON.stringify(info);
+            """)
+            step("captcha_info", f"Captcha details: {captcha_info}")
+
+        # Step 9: Store session, wait for code
+        _human_delay(3, 5)
+        new_body = driver.find_element(By.TAG_NAME, "body").text
+        snap(driver, "waiting_for_code")
+        step("waiting", f"Current page state: {new_body[:300]}")
+
+        # Check if code input appeared (TikTok might show it)
+        code_inputs = driver.find_elements(By.CSS_SELECTOR, 'input[type="text"], input[type="number"], input[type="tel"]')
+        code_inputs = [inp for inp in code_inputs if inp.is_displayed() and inp.get_attribute("name") != "username"]
+        if code_inputs:
+            step("code_input_found", f"Found {len(code_inputs)} code input field(s). Code was likely sent!")
+
+            # If IMAP available, try auto-read
+            if email_password:
+                from tiktok_api import fetch_code_from_imap, _get_imap_server
+                if not imap_server:
+                    imap_server = _get_imap_server(username)
+                step("imap_waiting", f"Waiting for code via IMAP ({imap_server})...")
+                code = fetch_code_from_imap(username, email_password, imap_server, timeout=90)
+                if code:
+                    step("imap_got_code", f"Got code: {code}")
+                    return _browser_enter_code_ui(driver, username, code, steps)
+                step("imap_no_code", "No code via IMAP. Enter manually.")
+
+            _pending_browser_sessions[username] = {"driver": driver, "steps": steps}
+            return {"ok": False, "steps": steps, "need_code": True, "username": username}
+
+        step("no_code_input", "No code input field visible. Code may not have been sent.")
+        _pending_browser_sessions[username] = {"driver": driver, "steps": steps}
+        return {"ok": False, "steps": steps, "need_code": True, "username": username,
+                "warning": "Code input not found — check if code was actually sent to your email"}
+
+    except Exception as e:
+        step("exception", str(e))
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+        return {"ok": False, "steps": steps, "error": str(e)}
+
+
+def _browser_enter_code_ui(driver, username: str, code: str, steps: list) -> dict:
+    """Enter verification code into TikTok's actual UI input fields."""
+
+    def step(name, note=""):
+        steps.append({"step": name, "note": note})
+        logger.info(f"BrowserCode [{name}]: {note}")
+
+    try:
+        code_inputs = driver.find_elements(By.CSS_SELECTOR, 'input[type="text"], input[type="number"], input[type="tel"]')
+        code_inputs = [inp for inp in code_inputs if inp.is_displayed() and inp.get_attribute("name") != "username"]
+
+        if not code_inputs:
+            code_inputs = driver.find_elements(By.CSS_SELECTOR, 'input')
+            code_inputs = [inp for inp in code_inputs if inp.is_displayed()
+                          and inp.get_attribute("type") not in ("password", "hidden")]
+
+        if not code_inputs:
+            step("no_input", "No code input field found")
+            driver.quit()
+            return {"ok": False, "steps": steps, "error": "No code input field found"}
+
+        step("inputs_found", f"Found {len(code_inputs)} input fields")
+
+        if len(code_inputs) == 1:
+            code_inputs[0].clear()
+            _human_type(code_inputs[0], code)
+        elif len(code_inputs) >= 4:
+            for i, digit in enumerate(code):
+                if i < len(code_inputs):
+                    code_inputs[i].send_keys(digit)
+                    _human_delay(0.05, 0.15)
+        else:
+            code_inputs[0].clear()
+            _human_type(code_inputs[0], code)
+
+        step("code_entered", f"Code {code} entered into UI")
+        _human_delay(1, 2)
+
+        # Try clicking verify/submit button
+        try:
+            verify_btn = driver.execute_script("""
+                var btns = document.querySelectorAll('button, div[role="button"]');
+                for (var i = 0; i < btns.length; i++) {
+                    var t = (btns[i].innerText || '').trim().toLowerCase();
+                    if (t.match(/verify|submit|confirm|log.?in|подтвер|войти|далее|next/i) && btns[i].offsetHeight > 0) {
+                        btns[i].click();
+                        return 'clicked:' + t;
+                    }
+                }
+                return 'no_button';
+            """)
+            step("verify_btn", f"Verify button: {verify_btn}")
+        except Exception:
+            from selenium.webdriver.common.keys import Keys
+            code_inputs[-1].send_keys(Keys.ENTER)
+            step("verify_btn", "Pressed Enter as fallback")
+
+        _human_delay(5, 8)
+
+        fname = f"blogin_{int(datetime.now(timezone.utc).timestamp())}_after_code.png"
+        path = os.path.join(SCREENSHOTS_DIR, fname)
+        try:
+            driver.save_screenshot(path)
+        except Exception:
+            pass
+
+        if "login" not in driver.current_url.lower():
+            _save_cookies(driver, username)
+            step("success", "LOGIN SUCCESS after code entry!")
+            driver.quit()
+            return {"ok": True, "steps": steps}
+
+        body_text = driver.find_element(By.TAG_NAME, "body").text
+        if "incorrect" in body_text.lower() or "invalid" in body_text.lower() or "wrong" in body_text.lower():
+            step("wrong_code", "Wrong code entered")
+            driver.quit()
+            return {"ok": False, "steps": steps, "error": "Wrong verification code"}
+
+        step("still_login", f"Still on login page. Body: {body_text[:300]}")
+        driver.quit()
+        return {"ok": False, "steps": steps, "error": "Verification did not complete"}
+
+    except Exception as e:
+        step("exception", str(e))
+        try:
+            driver.quit()
+        except Exception:
+            pass
+        return {"ok": False, "steps": steps, "error": str(e)}
+
+
+def _browser_submit_manual_code_sync(username: str, code: str) -> dict:
+    pending = _pending_browser_sessions.pop(username, None)
+    if not pending:
+        return {"ok": False, "error": f"No pending browser session for {username}. Run login first."}
+
+    driver = pending["driver"]
+    steps = pending["steps"]
+
+    def step(name, note=""):
+        steps.append({"step": name, "note": note})
+    step("manual_code", f"Code entered: {code}")
+
+    return _browser_enter_code_ui(driver, username, code, steps)
+
+
+async def browser_fetch_login(username: str, password: str, proxy: str = "",
+                              email_password: str = "", imap_server: str = "") -> dict:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        _executor, _browser_fetch_login_sync, username, password, proxy, email_password, imap_server
+    )
+
+
+async def browser_submit_manual_code(username: str, code: str) -> dict:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_executor, _browser_submit_manual_code_sync, username, code)
+
+
 def _login_account_sync(driver: uc.Chrome, username: str, password: str) -> bool:
     import time
 
