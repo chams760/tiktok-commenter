@@ -1,398 +1,21 @@
 import asyncio
 import json
 import io
+import os
+import sys
 from datetime import datetime, timezone
 from aiohttp import web
 
-from aiogram import Bot, Dispatcher, F, types
-from aiogram.filters import Command
-from aiogram.types import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    WebAppInfo,
-    BufferedInputFile,
-)
 from loguru import logger
 
-import os
-
-import config
-import database as db
-from tiktok_worker import run_task, take_debug_screenshot, get_all_active_tasks
-
-bot = Bot(token=config.BOT_TOKEN)
-dp = Dispatcher()
-
+logger.remove()
+logger.add(sys.stderr, level="INFO")
 logger.add("logs/bot_{time}.log", rotation="1 day", retention="7 days", level="INFO")
-
-
-def is_admin(user_id: int) -> bool:
-    return not config.ADMIN_IDS or user_id in config.ADMIN_IDS
-
-
-@dp.message(Command("start"))
-async def cmd_start(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        await msg.answer("Доступ запрещён.")
-        return
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 Новая задача", callback_data="new_task")],
-        [InlineKeyboardButton(text="👥 Аккаунты", callback_data="accounts")],
-        [InlineKeyboardButton(text="📊 Статистика", callback_data="stats")],
-        [InlineKeyboardButton(text="📜 Задачи", callback_data="tasks")],
-    ])
-
-    if config.WEBAPP_URL:
-        kb.inline_keyboard.insert(0, [
-            InlineKeyboardButton(text="🌐 Панель управления", web_app=WebAppInfo(url=config.WEBAPP_URL))
-        ])
-
-    await msg.answer(
-        "TikTok Commenter Bot\n\n"
-        "Управление автоматическими комментариями в TikTok.\n"
-        "Выберите действие:",
-        reply_markup=kb,
-    )
-
-
-@dp.callback_query(F.data == "new_task")
-async def cb_new_task(cb: types.CallbackQuery):
-    if not is_admin(cb.from_user.id):
-        return
-    await cb.message.answer(
-        "Для создания задачи отправьте сообщение в формате:\n\n"
-        "/task <поисковый запрос> | <текст комментария> | <лимит>\n\n"
-        "Пример:\n"
-        "/task как заработать в интернете | Подпишись на мой канал! | 50"
-    )
-    await cb.answer()
-
-
-@dp.message(Command("task"))
-async def cmd_task(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-
-    text = msg.text.replace("/task", "", 1).strip()
-    parts = [p.strip() for p in text.split("|")]
-
-    if len(parts) < 2:
-        await msg.answer(
-            "Неверный формат. Используйте:\n"
-            "/task запрос | комментарий | лимит\n\n"
-            "Лимит необязателен (по умолчанию 100)."
-        )
-        return
-
-    query = parts[0]
-    comment = parts[1]
-    limit = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 100
-
-    accounts = await db.get_accounts()
-    if not accounts:
-        await msg.answer("Нет активных аккаунтов. Сначала загрузите аккаунты через /upload.")
-        return
-
-    task_id = await db.create_task(query, comment, limit)
-    await msg.answer(
-        f"Задача #{task_id} создана\n\n"
-        f"Запрос: {query}\n"
-        f"Комментарий: {comment}\n"
-        f"Лимит: {limit}\n"
-        f"Аккаунтов: {len(accounts)}\n\n"
-        "Запуск...",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отменить", callback_data=f"cancel_{task_id}")]
-        ]),
-    )
-
-    asyncio.create_task(run_task(task_id))
-
-
-@dp.callback_query(F.data.startswith("cancel_"))
-async def cb_cancel_task(cb: types.CallbackQuery):
-    if not is_admin(cb.from_user.id):
-        return
-    task_id = int(cb.data.split("_")[1])
-    await db.update_task(task_id, status="cancelled")
-    await cb.message.answer(f"Задача #{task_id} отменена.")
-    await cb.answer()
-
-
-@dp.callback_query(F.data == "accounts")
-async def cb_accounts(cb: types.CallbackQuery):
-    if not is_admin(cb.from_user.id):
-        return
-    accounts = await db.get_accounts()
-    total = len(accounts)
-    if total == 0:
-        text = "Нет загруженных аккаунтов.\n\nОтправьте файл .txt с аккаунтами (формат: login:password, по одному на строку)."
-    else:
-        lines = [f"Аккаунтов: {total}\n"]
-        for acc in accounts[:20]:
-            status_icon = "✅" if acc["status"] == "active" else "❌"
-            lines.append(f"{status_icon} {acc['username']} — {acc['comments_today']} комм. сегодня")
-        if total > 20:
-            lines.append(f"\n... и ещё {total - 20}")
-        text = "\n".join(lines)
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🗑 Удалить все", callback_data="del_accounts")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
-    ])
-    await cb.message.answer(text, reply_markup=kb)
-    await cb.answer()
-
-
-@dp.callback_query(F.data == "del_accounts")
-async def cb_del_accounts(cb: types.CallbackQuery):
-    if not is_admin(cb.from_user.id):
-        return
-    await db.delete_all_accounts()
-    await cb.message.answer("Все аккаунты удалены.")
-    await cb.answer()
-
-
-@dp.message(F.document)
-async def handle_document(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-
-    doc = msg.document
-    if not doc.file_name.endswith(".txt"):
-        await msg.answer("Отправьте .txt файл с аккаунтами (login:password).")
-        return
-
-    file = await bot.download(doc)
-    content = file.read().decode("utf-8", errors="ignore")
-    lines = [l.strip() for l in content.splitlines() if l.strip()]
-
-    accounts = []
-    for line in lines:
-        if ":" in line:
-            parts = line.split(":", 1)
-            accounts.append((parts[0].strip(), parts[1].strip()))
-
-    if not accounts:
-        await msg.answer("Не удалось распарсить аккаунты. Формат: login:password")
-        return
-
-    added = await db.add_accounts(accounts)
-    await msg.answer(f"Загружено аккаунтов: {len(accounts)}")
-
-
-@dp.callback_query(F.data == "stats")
-async def cb_stats(cb: types.CallbackQuery):
-    if not is_admin(cb.from_user.id):
-        return
-    stats = await db.get_stats()
-    text = (
-        f"📊 Статистика\n\n"
-        f"Аккаунтов: {stats['accounts_active']}/{stats['accounts_total']} (активных/всего)\n"
-        f"Комментариев отправлено: {stats['comments_sent']}\n"
-        f"Ошибок: {stats['comments_errors']}\n"
-        f"Активных задач: {stats['active_tasks']}"
-    )
-    await cb.message.answer(
-        text,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
-        ]),
-    )
-    await cb.answer()
-
-
-@dp.callback_query(F.data == "tasks")
-async def cb_tasks(cb: types.CallbackQuery):
-    if not is_admin(cb.from_user.id):
-        return
-    tasks = await db.get_all_tasks()
-    if not tasks:
-        await cb.message.answer("Задач пока нет.")
-        await cb.answer()
-        return
-
-    status_map = {
-        "pending": "⏳",
-        "running": "▶️",
-        "done": "✅",
-        "cancelled": "❌",
-        "paused_no_accounts": "⚠️",
-    }
-
-    lines = ["📜 Последние задачи:\n"]
-    for t in tasks:
-        icon = status_map.get(t["status"], "❓")
-        lines.append(
-            f"{icon} #{t['id']} | {t['search_query'][:30]}\n"
-            f"   {t['comments_done']}/{t['max_comments']} отправлено, {t['comments_failed']} ошибок"
-        )
-    await cb.message.answer(
-        "\n".join(lines),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
-        ]),
-    )
-    await cb.answer()
-
-
-@dp.callback_query(F.data == "back_main")
-async def cb_back(cb: types.CallbackQuery):
-    await cmd_start(cb.message)
-    await cb.answer()
-
-
-@dp.message(Command("screen"))
-async def cmd_screen(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-
-    args = msg.text.replace("/screen", "", 1).strip()
-    task_id = int(args) if args.isdigit() else None
-
-    active = get_all_active_tasks()
-    if not active:
-        await msg.answer("Нет активных задач с открытым браузером.")
-        return
-
-    if task_id is None and len(active) == 1:
-        task_id = active[0]
-    elif task_id is None:
-        await msg.answer(
-            f"Активные задачи: {', '.join(f'#{t}' for t in active)}\n"
-            f"Укажите ID: /screen <id>"
-        )
-        return
-
-    await msg.answer(f"Делаю скриншот задачи #{task_id}...")
-
-    path = await take_debug_screenshot(task_id)
-    if path and os.path.exists(path):
-        with open(path, "rb") as f:
-            photo = BufferedInputFile(f.read(), filename=os.path.basename(path))
-        await msg.answer_photo(photo, caption=f"Скриншот задачи #{task_id}")
-    else:
-        await msg.answer(
-            f"Не удалось сделать скриншот. Задача #{task_id} может быть неактивна "
-            f"или браузер закрыт между итерациями.\n\n"
-            f"Активные задачи: {', '.join(f'#{t}' for t in active) if active else 'нет'}"
-        )
-
-
-@dp.message(Command("errors"))
-async def cmd_errors(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-
-    screenshots_dir = os.path.join(os.path.dirname(__file__), "screenshots")
-    if not os.path.exists(screenshots_dir):
-        await msg.answer("Нет скриншотов ошибок.")
-        return
-
-    files = sorted(
-        [f for f in os.listdir(screenshots_dir) if f.endswith(".png")],
-        key=lambda x: os.path.getmtime(os.path.join(screenshots_dir, x)),
-        reverse=True,
-    )
-
-    if not files:
-        await msg.answer("Нет скриншотов ошибок.")
-        return
-
-    count = min(5, len(files))
-    await msg.answer(f"Последние {count} скриншотов ошибок:")
-
-    for fname in files[:count]:
-        fpath = os.path.join(screenshots_dir, fname)
-        with open(fpath, "rb") as f:
-            photo = BufferedInputFile(f.read(), filename=fname)
-        await msg.answer_photo(photo, caption=fname)
-
-
-@dp.message(Command("help"))
-async def cmd_help(msg: types.Message):
-    await msg.answer(
-        "Команды:\n\n"
-        "/start — Главное меню\n"
-        "/task запрос | комментарий | лимит — Создать задачу\n"
-        "/stats — Статистика\n"
-        "/accounts — Список аккаунтов\n"
-        "/screen [id] — Скриншот браузера активной задачи\n"
-        "/errors — Последние скриншоты ошибок\n"
-        "/help — Помощь\n\n"
-        "Загрузка аккаунтов: отправьте .txt файл (login:password, по строке)."
-    )
-
-
-@dp.message(Command("stats"))
-async def cmd_stats(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-    stats = await db.get_stats()
-    await msg.answer(
-        f"Аккаунтов: {stats['accounts_active']}/{stats['accounts_total']}\n"
-        f"Отправлено: {stats['comments_sent']}\n"
-        f"Ошибок: {stats['comments_errors']}\n"
-        f"Активных задач: {stats['active_tasks']}"
-    )
-
-
-@dp.message(Command("accounts"))
-async def cmd_accounts(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-    accounts = await db.get_accounts()
-    if not accounts:
-        await msg.answer("Нет аккаунтов. Загрузите .txt файл.")
-        return
-    lines = []
-    for acc in accounts[:30]:
-        s = "✅" if acc["status"] == "active" else "❌"
-        lines.append(f"{s} {acc['username']} — {acc['comments_today']} комм.")
-    await msg.answer("\n".join(lines))
-
-
-@dp.message(F.content_type == "web_app_data")
-async def handle_webapp_data(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-    try:
-        data = json.loads(msg.web_app_data.data)
-        action = data.get("action")
-
-        if action == "create_task":
-            query = data["query"]
-            comment = data["comment"]
-            limit = int(data.get("limit", 100))
-            task_id = await db.create_task(query, comment, limit)
-            await msg.answer(f"Задача #{task_id} создана через WebApp.\nЗапуск...")
-            asyncio.create_task(run_task(task_id))
-
-        elif action == "upload_accounts":
-            raw = data.get("accounts", "")
-            lines = [l.strip() for l in raw.splitlines() if ":" in l]
-            accounts = [(l.split(":", 1)[0], l.split(":", 1)[1]) for l in lines]
-            if accounts:
-                await db.add_accounts(accounts)
-                await msg.answer(f"Загружено {len(accounts)} аккаунтов через WebApp.")
-            else:
-                await msg.answer("Не удалось распарсить аккаунты.")
-
-        elif action == "get_stats":
-            stats = await db.get_stats()
-            await msg.answer(
-                f"Аккаунтов: {stats['accounts_active']}/{stats['accounts_total']}\n"
-                f"Отправлено: {stats['comments_sent']} | Ошибок: {stats['comments_errors']}"
-            )
-
-    except Exception as e:
-        logger.error(f"WebApp data error: {e}")
-        await msg.answer(f"Ошибка: {e}")
 
 
 async def health_handler(request):
     try:
+        import database as db
         stats = await db.get_stats()
         return web.json_response({
             "status": "ok",
@@ -425,26 +48,317 @@ async def start_health_server():
     return runner
 
 
-async def main():
-    port = int(os.environ.get("PORT", 8080))
-    logger.info(f"Запуск приложения на порту {port}")
-
-    runner = await start_health_server()
-
-    await db.init_db()
+async def start_bot():
+    import config
+    import database as db
 
     if not config.BOT_TOKEN:
-        logger.error("BOT_TOKEN не задан! Бот не запущен, но health-сервер работает.")
-        while True:
-            await asyncio.sleep(3600)
-    else:
-        logger.info("Бот запущен")
+        logger.error("BOT_TOKEN не задан! Health-сервер работает, бот — нет.")
+        return
+
+    from aiogram import Bot, Dispatcher, F, types
+    from aiogram.filters import Command
+    from aiogram.types import (
+        InlineKeyboardButton,
+        InlineKeyboardMarkup,
+        WebAppInfo,
+        BufferedInputFile,
+    )
+    from tiktok_worker import run_task, take_debug_screenshot, get_all_active_tasks
+
+    bot = Bot(token=config.BOT_TOKEN)
+    dp = Dispatcher()
+
+    def is_admin(user_id: int) -> bool:
+        return not config.ADMIN_IDS or user_id in config.ADMIN_IDS
+
+    @dp.message(Command("start"))
+    async def cmd_start(msg: types.Message):
+        if not is_admin(msg.from_user.id):
+            await msg.answer("Доступ запрещён.")
+            return
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📋 Новая задача", callback_data="new_task")],
+            [InlineKeyboardButton(text="👥 Аккаунты", callback_data="accounts")],
+            [InlineKeyboardButton(text="📊 Статистика", callback_data="stats")],
+            [InlineKeyboardButton(text="📜 Задачи", callback_data="tasks")],
+        ])
+        if config.WEBAPP_URL:
+            kb.inline_keyboard.insert(0, [
+                InlineKeyboardButton(text="🌐 Панель управления", web_app=WebAppInfo(url=config.WEBAPP_URL))
+            ])
+        await msg.answer(
+            "TikTok Commenter Bot\n\n"
+            "Управление автоматическими комментариями в TikTok.\n"
+            "Выберите действие:",
+            reply_markup=kb,
+        )
+
+    @dp.callback_query(F.data == "new_task")
+    async def cb_new_task(cb: types.CallbackQuery):
+        if not is_admin(cb.from_user.id):
+            return
+        await cb.message.answer(
+            "Для создания задачи отправьте сообщение в формате:\n\n"
+            "/task <поисковый запрос> | <текст комментария> | <лимит>\n\n"
+            "Пример:\n"
+            "/task как заработать в интернете | Подпишись на мой канал! | 50"
+        )
+        await cb.answer()
+
+    @dp.message(Command("task"))
+    async def cmd_task(msg: types.Message):
+        if not is_admin(msg.from_user.id):
+            return
+        text = msg.text.replace("/task", "", 1).strip()
+        parts = [p.strip() for p in text.split("|")]
+        if len(parts) < 2:
+            await msg.answer(
+                "Неверный формат. Используйте:\n"
+                "/task запрос | комментарий | лимит\n\n"
+                "Лимит необязателен (по умолчанию 100)."
+            )
+            return
+        query = parts[0]
+        comment = parts[1]
+        limit = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 100
+        accounts = await db.get_accounts()
+        if not accounts:
+            await msg.answer("Нет активных аккаунтов. Сначала загрузите аккаунты через /upload.")
+            return
+        task_id = await db.create_task(query, comment, limit)
+        await msg.answer(
+            f"Задача #{task_id} создана\n\n"
+            f"Запрос: {query}\n"
+            f"Комментарий: {comment}\n"
+            f"Лимит: {limit}\n"
+            f"Аккаунтов: {len(accounts)}\n\n"
+            "Запуск...",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❌ Отменить", callback_data=f"cancel_{task_id}")]
+            ]),
+        )
+        asyncio.create_task(run_task(task_id))
+
+    @dp.callback_query(F.data.startswith("cancel_"))
+    async def cb_cancel_task(cb: types.CallbackQuery):
+        if not is_admin(cb.from_user.id):
+            return
+        task_id = int(cb.data.split("_")[1])
+        await db.update_task(task_id, status="cancelled")
+        await cb.message.answer(f"Задача #{task_id} отменена.")
+        await cb.answer()
+
+    @dp.callback_query(F.data == "accounts")
+    async def cb_accounts(cb: types.CallbackQuery):
+        if not is_admin(cb.from_user.id):
+            return
+        accounts = await db.get_accounts()
+        total = len(accounts)
+        if total == 0:
+            text = "Нет загруженных аккаунтов.\n\nОтправьте файл .txt с аккаунтами (формат: login:password, по одному на строку)."
+        else:
+            lines = [f"Аккаунтов: {total}\n"]
+            for acc in accounts[:20]:
+                status_icon = "✅" if acc["status"] == "active" else "❌"
+                lines.append(f"{status_icon} {acc['username']} — {acc['comments_today']} комм. сегодня")
+            if total > 20:
+                lines.append(f"\n... и ещё {total - 20}")
+            text = "\n".join(lines)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🗑 Удалить все", callback_data="del_accounts")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
+        ])
+        await cb.message.answer(text, reply_markup=kb)
+        await cb.answer()
+
+    @dp.callback_query(F.data == "del_accounts")
+    async def cb_del_accounts(cb: types.CallbackQuery):
+        if not is_admin(cb.from_user.id):
+            return
+        await db.delete_all_accounts()
+        await cb.message.answer("Все аккаунты удалены.")
+        await cb.answer()
+
+    @dp.message(F.document)
+    async def handle_document(msg: types.Message):
+        if not is_admin(msg.from_user.id):
+            return
+        doc = msg.document
+        if not doc.file_name.endswith(".txt"):
+            await msg.answer("Отправьте .txt файл с аккаунтами (login:password).")
+            return
+        file = await bot.download(doc)
+        content = file.read().decode("utf-8", errors="ignore")
+        lines = [l.strip() for l in content.splitlines() if l.strip()]
+        accounts = []
+        for line in lines:
+            if ":" in line:
+                p = line.split(":", 1)
+                accounts.append((p[0].strip(), p[1].strip()))
+        if not accounts:
+            await msg.answer("Не удалось распарсить аккаунты. Формат: login:password")
+            return
+        await db.add_accounts(accounts)
+        await msg.answer(f"Загружено аккаунтов: {len(accounts)}")
+
+    @dp.callback_query(F.data == "stats")
+    async def cb_stats(cb: types.CallbackQuery):
+        if not is_admin(cb.from_user.id):
+            return
+        stats = await db.get_stats()
+        await cb.message.answer(
+            f"📊 Статистика\n\n"
+            f"Аккаунтов: {stats['accounts_active']}/{stats['accounts_total']} (активных/всего)\n"
+            f"Комментариев отправлено: {stats['comments_sent']}\n"
+            f"Ошибок: {stats['comments_errors']}\n"
+            f"Активных задач: {stats['active_tasks']}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
+            ]),
+        )
+        await cb.answer()
+
+    @dp.callback_query(F.data == "tasks")
+    async def cb_tasks(cb: types.CallbackQuery):
+        if not is_admin(cb.from_user.id):
+            return
+        tasks = await db.get_all_tasks()
+        if not tasks:
+            await cb.message.answer("Задач пока нет.")
+            await cb.answer()
+            return
+        status_map = {"pending": "⏳", "running": "▶️", "done": "✅", "cancelled": "❌", "paused_no_accounts": "⚠️"}
+        lines = ["📜 Последние задачи:\n"]
+        for t in tasks:
+            icon = status_map.get(t["status"], "❓")
+            lines.append(f"{icon} #{t['id']} | {t['search_query'][:30]}\n   {t['comments_done']}/{t['max_comments']} отправлено, {t['comments_failed']} ошибок")
+        await cb.message.answer(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
+            ]),
+        )
+        await cb.answer()
+
+    @dp.callback_query(F.data == "back_main")
+    async def cb_back(cb: types.CallbackQuery):
+        await cmd_start(cb.message)
+        await cb.answer()
+
+    @dp.message(Command("screen"))
+    async def cmd_screen(msg: types.Message):
+        if not is_admin(msg.from_user.id):
+            return
+        args = msg.text.replace("/screen", "", 1).strip()
+        task_id = int(args) if args.isdigit() else None
+        active = get_all_active_tasks()
+        if not active:
+            await msg.answer("Нет активных задач с открытым браузером.")
+            return
+        if task_id is None and len(active) == 1:
+            task_id = active[0]
+        elif task_id is None:
+            await msg.answer(f"Активные задачи: {', '.join(f'#{t}' for t in active)}\nУкажите ID: /screen <id>")
+            return
+        await msg.answer(f"Делаю скриншот задачи #{task_id}...")
+        path = await take_debug_screenshot(task_id)
+        if path and os.path.exists(path):
+            with open(path, "rb") as f:
+                photo = BufferedInputFile(f.read(), filename=os.path.basename(path))
+            await msg.answer_photo(photo, caption=f"Скриншот задачи #{task_id}")
+        else:
+            await msg.answer(f"Не удалось сделать скриншот. Задача #{task_id} может быть неактивна или браузер закрыт между итерациями.")
+
+    @dp.message(Command("errors"))
+    async def cmd_errors(msg: types.Message):
+        if not is_admin(msg.from_user.id):
+            return
+        screenshots_dir = os.path.join(os.path.dirname(__file__), "screenshots")
+        if not os.path.exists(screenshots_dir):
+            await msg.answer("Нет скриншотов ошибок.")
+            return
+        files = sorted(
+            [f for f in os.listdir(screenshots_dir) if f.endswith(".png")],
+            key=lambda x: os.path.getmtime(os.path.join(screenshots_dir, x)),
+            reverse=True,
+        )
+        if not files:
+            await msg.answer("Нет скриншотов ошибок.")
+            return
+        count = min(5, len(files))
+        await msg.answer(f"Последние {count} скриншотов ошибок:")
+        for fname in files[:count]:
+            fpath = os.path.join(screenshots_dir, fname)
+            with open(fpath, "rb") as f:
+                photo = BufferedInputFile(f.read(), filename=fname)
+            await msg.answer_photo(photo, caption=fname)
+
+    @dp.message(Command("help"))
+    async def cmd_help(msg: types.Message):
+        await msg.answer(
+            "Команды:\n\n"
+            "/start — Главное меню\n"
+            "/task запрос | комментарий | лимит — Создать задачу\n"
+            "/stats — Статистика\n"
+            "/accounts — Список аккаунтов\n"
+            "/screen [id] — Скриншот браузера активной задачи\n"
+            "/errors — Последние скриншоты ошибок\n"
+            "/help — Помощь\n\n"
+            "Загрузка аккаунтов: отправьте .txt файл (login:password, по строке)."
+        )
+
+    @dp.message(F.content_type == "web_app_data")
+    async def handle_webapp_data(msg: types.Message):
+        if not is_admin(msg.from_user.id):
+            return
         try:
-            await dp.start_polling(bot)
+            data = json.loads(msg.web_app_data.data)
+            action = data.get("action")
+            if action == "create_task":
+                task_id = await db.create_task(data["query"], data["comment"], int(data.get("limit", 100)))
+                await msg.answer(f"Задача #{task_id} создана через WebApp.\nЗапуск...")
+                asyncio.create_task(run_task(task_id))
+            elif action == "upload_accounts":
+                raw = data.get("accounts", "")
+                lines = [l.strip() for l in raw.splitlines() if ":" in l]
+                accounts = [(l.split(":", 1)[0], l.split(":", 1)[1]) for l in lines]
+                if accounts:
+                    await db.add_accounts(accounts)
+                    await msg.answer(f"Загружено {len(accounts)} аккаунтов через WebApp.")
+                else:
+                    await msg.answer("Не удалось распарсить аккаунты.")
+            elif action == "get_stats":
+                stats = await db.get_stats()
+                await msg.answer(f"Аккаунтов: {stats['accounts_active']}/{stats['accounts_total']}\nОтправлено: {stats['comments_sent']} | Ошибок: {stats['comments_errors']}")
         except Exception as e:
-            logger.error(f"Ошибка бота: {e}")
-            while True:
-                await asyncio.sleep(3600)
+            logger.error(f"WebApp data error: {e}")
+            await msg.answer(f"Ошибка: {e}")
+
+    logger.info("Бот запущен, начинаю polling...")
+    await dp.start_polling(bot)
+
+
+async def main():
+    port = int(os.environ.get("PORT", 8080))
+    logger.info(f"Запуск приложения, PORT={port}")
+
+    await start_health_server()
+    logger.info("Health-сервер готов, Railway healthcheck должен проходить")
+
+    try:
+        import database as db
+        await db.init_db()
+    except Exception as e:
+        logger.error(f"Ошибка инициализации БД: {e}")
+
+    try:
+        await start_bot()
+    except Exception as e:
+        logger.error(f"Ошибка бота: {e}")
+
+    while True:
+        await asyncio.sleep(3600)
 
 
 if __name__ == "__main__":
