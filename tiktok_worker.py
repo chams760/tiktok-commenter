@@ -22,18 +22,21 @@ _xvfb_proc = None
 def _ensure_xvfb():
     global _xvfb_proc
     if _xvfb_proc and _xvfb_proc.poll() is None:
+        os.environ["DISPLAY"] = ":99"
         return True
-    display = os.environ.get("DISPLAY")
-    if display:
-        return True
+    # Kill any stale reference
+    _xvfb_proc = None
+    # Clear DISPLAY so Chrome doesn't try to connect to dead xvfb
+    os.environ.pop("DISPLAY", None)
     try:
         _xvfb_proc = subprocess.Popen(
             ["Xvfb", ":99", "-screen", "0", "1920x1080x24", "-nolisten", "tcp", "-ac"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        time.sleep(0.5)
+        time.sleep(1)
         if _xvfb_proc.poll() is not None:
-            logger.warning("Xvfb exited immediately, falling back to headless")
+            logger.warning("Xvfb exited immediately, using headless")
+            _xvfb_proc = None
             return False
         os.environ["DISPLAY"] = ":99"
         logger.info("Xvfb started on :99")

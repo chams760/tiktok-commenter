@@ -53,8 +53,6 @@ COPY . .
 
 RUN mkdir -p logs screenshots sessions /dev/shm && chmod 1777 /dev/shm
 
-ENV DISPLAY=:99
-
 EXPOSE 8080
 
 CMD ["python", "bot.py"]
