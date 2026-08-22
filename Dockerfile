@@ -29,6 +29,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     ca-certificates \
     xvfb \
+    libgtk-3-0 \
+    libgdk-pixbuf2.0-0 \
+    libxcursor1 \
+    libdbus-glib-1-2 \
     && rm -rf /var/lib/apt/lists/*
 
 ENV DISPLAY=:99
