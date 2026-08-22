@@ -40,10 +40,11 @@ async def init_db():
                 created_at TEXT DEFAULT ''
             );
         """)
-        try:
-            await db.execute("ALTER TABLE accounts ADD COLUMN proxy TEXT DEFAULT ''")
-        except Exception:
-            pass
+        for col, default in [("proxy", "''"), ("email_password", "''"), ("imap_server", "''")]:
+            try:
+                await db.execute(f"ALTER TABLE accounts ADD COLUMN {col} TEXT DEFAULT {default}")
+            except Exception:
+                pass
         await db.commit()
 
 
@@ -54,10 +55,12 @@ async def add_accounts(accounts: list[tuple]) -> int:
         u = t[0]
         p = t[1]
         pr = t[2] if len(t) > 2 else ""
-        rows.append((u, p, pr, now, now))
+        ep = t[3] if len(t) > 3 else ""
+        im = t[4] if len(t) > 4 else ""
+        rows.append((u, p, pr, ep, im, now, now))
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executemany(
-            "INSERT INTO accounts (username, password, proxy, added_at, last_reset) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO accounts (username, password, proxy, email_password, imap_server, added_at, last_reset) VALUES (?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
         await db.commit()

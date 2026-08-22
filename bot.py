@@ -82,7 +82,7 @@ async def api_stats(request):
         tasks = await db.get_all_tasks(limit=10)
         return web.json_response({
             "stats": stats,
-            "accounts": [{"id": a["id"], "username": a["username"], "status": a["status"], "comments_today": a["comments_today"], "proxy": a.get("proxy", "")} for a in accounts],
+            "accounts": [{"id": a["id"], "username": a["username"], "status": a["status"], "comments_today": a["comments_today"], "proxy": a.get("proxy", ""), "has_email_pass": bool(a.get("email_password", ""))} for a in accounts],
             "tasks": tasks,
         })
     except Exception as e:
@@ -128,8 +128,14 @@ async def api_upload_accounts(request):
             if len(parts) >= 2:
                 user = parts[0].strip()
                 passw = parts[1].strip()
-                proxy = ":".join(parts[2:]).strip() if len(parts) > 2 else ""
-                accounts.append((user, passw, proxy))
+                email_pass = ""
+                proxy = ""
+                if len(parts) == 3:
+                    email_pass = parts[2].strip()
+                elif len(parts) >= 4:
+                    email_pass = parts[2].strip()
+                    proxy = ":".join(parts[3:]).strip()
+                accounts.append((user, passw, proxy, email_pass))
         if not accounts:
             return web.json_response({"error": "no valid accounts"}, status=400)
         await db.add_accounts(accounts)
@@ -183,6 +189,45 @@ async def api_test_login(request):
         return web.json_response({"ok": True, "steps": steps, "username": username, "proxy": bool(proxy)})
     except Exception as e:
         logger.error(f"Test login error: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def api_login(request):
+    try:
+        import database as db
+        from tiktok_api import api_login as do_api_login
+        data = await request.json()
+        account_id = data.get("account_id")
+
+        if account_id:
+            accounts = await db.get_accounts()
+            acc = next((a for a in accounts if a["id"] == int(account_id)), None)
+            if not acc:
+                return web.json_response({"error": "account not found"}, status=404)
+            username = acc["username"]
+            password = acc["password"]
+            proxy = acc.get("proxy", "")
+            email_password = acc.get("email_password", "") or data.get("email_password", "")
+            imap_server = acc.get("imap_server", "") or data.get("imap_server", "")
+        else:
+            username = data.get("username", "").strip()
+            password = data.get("password", "").strip()
+            proxy = data.get("proxy", "").strip()
+            email_password = data.get("email_password", "").strip()
+            imap_server = data.get("imap_server", "").strip()
+
+        if not username:
+            return web.json_response({"error": "username required"}, status=400)
+        if not email_password:
+            return web.json_response({"error": "email_password required for auto-login"}, status=400)
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, do_api_login, username, password, email_password, imap_server, proxy
+        )
+        return web.json_response(result)
+    except Exception as e:
+        logger.error(f"API login error: {e}")
         return web.json_response({"error": str(e)}, status=500)
 
 
@@ -311,6 +356,7 @@ async def start_health_server():
     app.router.add_post("/api/cancel", api_cancel_task)
     app.router.add_post("/api/import-cookies", api_import_cookies)
     app.router.add_post("/api/verify-code", api_verify_code)
+    app.router.add_post("/api/login", api_login)
     port = int(os.environ.get("PORT", 8080))
     runner = web.AppRunner(app)
     await runner.setup()
@@ -471,10 +517,16 @@ async def start_bot():
                 parts = line.split(":")
                 user = parts[0].strip()
                 passw = parts[1].strip()
-                proxy = ":".join(parts[2:]).strip() if len(parts) > 2 else ""
-                accounts.append((user, passw, proxy))
+                email_pass = ""
+                proxy = ""
+                if len(parts) == 3:
+                    email_pass = parts[2].strip()
+                elif len(parts) >= 4:
+                    email_pass = parts[2].strip()
+                    proxy = ":".join(parts[3:]).strip()
+                accounts.append((user, passw, proxy, email_pass))
         if not accounts:
-            await msg.answer("Не удалось распарсить аккаунты.\nФормат: login:password или login:password:proxy")
+            await msg.answer("Не удалось распарсить аккаунты.\nФормат: email:tiktok_pass:email_pass:proxy")
             return
         with_proxy = sum(1 for a in accounts if a[2])
         await db.add_accounts(accounts)

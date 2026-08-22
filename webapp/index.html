@@ -308,9 +308,9 @@
     </div>
 
     <div class="section-label">Upload accounts</div>
-    <div style="font-size:12px;color:var(--text-3);margin-bottom:8px;">Format: login:password or login:password:proxy</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:8px;">Format: email:tiktok_pass:email_pass:proxy (email_pass and proxy optional)</div>
     <div class="field">
-        <textarea id="accounts-input" rows="5" placeholder="user@mail.com:pass123&#10;user2@mail.com:pass456:http://proxy:8080&#10;user3@mail.com:pass789:user:pass@proxy:8080"></textarea>
+        <textarea id="accounts-input" rows="5" placeholder="user@gmail.com:tiktokpass:emailpass&#10;user@mail.ru:tiktokpass:emailpass:login:pass:host:port&#10;user@outlook.com:tiktokpass"></textarea>
     </div>
     <button class="btn btn-primary" id="btn-upload" onclick="uploadAccounts()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -371,9 +371,40 @@
 <!-- ── Debug ── -->
 <div id="panel-debug" class="panel">
 
-    <div class="section-label">Test account login</div>
+    <div class="section-label">Auto login (API + IMAP)</div>
     <div class="card" style="margin-bottom:12px;">
-        <div style="font-size:13px;color:var(--text-2);margin-bottom:12px;">Opens a browser, tries to log in, and takes screenshots at every step so you can see exactly what happens.</div>
+        <div style="font-size:13px;color:var(--text-2);margin-bottom:12px;">
+            Fully automatic login. Bot sends a code request to TikTok via API, reads the code from your email via IMAP, and logs in.
+            No browser needed.
+        </div>
+        <div id="api-login-picker"></div>
+        <div class="sep"><span>or enter manually</span></div>
+        <div class="field" style="margin-bottom:8px;">
+            <input type="text" id="api-user" placeholder="TikTok email">
+        </div>
+        <div class="field" style="margin-bottom:8px;">
+            <input type="text" id="api-pass" placeholder="TikTok password">
+        </div>
+        <div class="field" style="margin-bottom:8px;">
+            <input type="text" id="api-email-pass" placeholder="Email password (for IMAP — to read verification code)">
+        </div>
+        <div class="field" style="margin-bottom:8px;">
+            <input type="text" id="api-imap" placeholder="IMAP server (auto-detect for gmail, outlook, mail.ru, yandex)">
+        </div>
+        <div class="field" style="margin-bottom:0;">
+            <input type="text" id="api-proxy" placeholder="Proxy (optional) — login:pass:host:port">
+        </div>
+    </div>
+    <button class="btn btn-primary" id="btn-api-login" onclick="apiLogin()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+        Auto Login
+    </button>
+
+    <div id="api-login-results" style="margin-top:16px;"></div>
+
+    <div class="section-label" style="margin-top:24px;">Browser test login</div>
+    <div class="card" style="margin-bottom:12px;">
+        <div style="font-size:13px;color:var(--text-2);margin-bottom:12px;">Opens a browser and tries to log in. Use for debugging — screenshots at every step.</div>
         <div id="test-login-picker"></div>
         <div class="sep"><span>or enter manually</span></div>
         <div class="field" style="margin-bottom:8px;">
@@ -383,39 +414,15 @@
             <input type="text" id="test-pass" placeholder="password">
         </div>
         <div class="field" style="margin-bottom:0;">
-            <input type="text" id="test-proxy" placeholder="proxy (optional) — http://ip:port or user:pass@ip:port">
+            <input type="text" id="test-proxy" placeholder="proxy (optional)">
         </div>
     </div>
-    <button class="btn btn-primary" id="btn-test" onclick="testLogin()">
+    <button class="btn btn-secondary" id="btn-test" onclick="testLogin()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
-        Test login
+        Browser Test
     </button>
 
     <div id="test-results" style="margin-top:16px;"></div>
-
-    <div class="section-label" style="margin-top:24px;">Import cookies (bypass login)</div>
-    <div class="card" style="margin-bottom:12px;">
-        <div style="font-size:13px;color:var(--text-2);margin-bottom:8px;">
-            TikTok blocks automated login. Instead: log in manually in your browser, export cookies with a browser extension
-            (Cookie-Editor, EditThisCookie), and paste them here.
-        </div>
-        <div style="font-size:12px;color:var(--text-3);margin-bottom:12px;">
-            1. Install "Cookie-Editor" extension in Chrome/Firefox<br>
-            2. Go to tiktok.com, log in to your account<br>
-            3. Click Cookie-Editor icon, click "Export" (JSON)<br>
-            4. Paste below with the account username
-        </div>
-        <div class="field" style="margin-bottom:8px;">
-            <input type="text" id="cookie-username" placeholder="Account username / email (must match loaded account)">
-        </div>
-        <div class="field" style="margin-bottom:0;">
-            <textarea id="cookie-json" rows="4" placeholder='Paste cookies JSON here...'></textarea>
-        </div>
-    </div>
-    <button class="btn btn-primary" id="btn-import-cookies" onclick="importCookies()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        Import cookies
-    </button>
 
     <div class="section-label" style="margin-top:24px;">Live screenshot</div>
     <div id="live-screen" class="screen-wrap">
@@ -475,7 +482,7 @@ function showTab(name, el) {
     document.getElementById('panel-' + name).classList.add('active');
     if (el) el.classList.add('active');
     if (name === 'dashboard') loadStats();
-    if (name === 'debug') loadAccountPicker();
+    if (name === 'debug') { loadAccountPicker(); loadApiLoginPicker(); }
     if (name === 'accounts') loadStats();
 }
 
@@ -629,6 +636,97 @@ function saveSettings() {
         delay_max: document.getElementById('delay-max').value
     }));
     toast('Settings saved', 'success');
+}
+
+async function loadApiLoginPicker() {
+    const data = await api('GET', '/api/stats');
+    if (data.error || !data.accounts) return;
+    const el = document.getElementById('api-login-picker');
+    if (!data.accounts.length) {
+        el.innerHTML = '<div style="font-size:13px;color:var(--text-3);">No accounts loaded. Add them in Accounts tab or enter manually below.</div>';
+        return;
+    }
+    el.innerHTML = '<div class="field-label">Pick an account</div>' +
+        data.accounts.map(a => {
+            const proxyTag = a.proxy ? '<span class="badge badge-warn" style="font-size:10px;padding:2px 6px;margin-left:6px;">proxy</span>' : '';
+            return `<div class="acc-item" style="cursor:pointer;" onclick="pickApiAccount(${a.id},'${esc(a.username)}')">
+                <div><div class="acc-name">${esc(a.username)}${proxyTag}</div></div>
+                <span class="badge ${a.status==='active'?'badge-ok':'badge-err'}">${a.status}</span>
+            </div>`;
+        }).join('');
+}
+
+function pickApiAccount(id, name) {
+    document.getElementById('api-user').value = '';
+    document.getElementById('api-pass').value = '';
+    document.getElementById('api-user').dataset.accountId = id;
+    document.querySelectorAll('#api-login-picker .acc-item').forEach(el => el.style.background = '');
+    event.currentTarget.style.background = 'var(--accent-dim)';
+    toast('Selected: ' + name, 'success');
+}
+
+async function apiLogin() {
+    const btn = document.getElementById('btn-api-login');
+    const results = document.getElementById('api-login-results');
+    const accountId = document.getElementById('api-user').dataset.accountId;
+    const manualUser = document.getElementById('api-user').value.trim();
+    const manualPass = document.getElementById('api-pass').value.trim();
+    const emailPass = document.getElementById('api-email-pass').value.trim();
+    const imapServer = document.getElementById('api-imap').value.trim();
+    const proxy = document.getElementById('api-proxy').value.trim();
+
+    if (!emailPass) { toast('Email password is required for IMAP', 'error'); return; }
+
+    let body = {};
+    if (accountId && !manualUser) {
+        body = { account_id: parseInt(accountId), email_password: emailPass, imap_server: imapServer, proxy };
+    } else if (manualUser) {
+        body = { username: manualUser, password: manualPass, email_password: emailPass, imap_server: imapServer, proxy };
+    } else {
+        toast('Select an account or enter email', 'error');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Logging in via API + IMAP... (up to 2 min)';
+    results.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-3);"><span class="spinner" style="width:24px;height:24px;border-width:3px;"></span><div style="margin-top:12px;font-size:13px;">Sending code to email, waiting for IMAP...</div></div>';
+
+    try {
+        const res = await fetch(API + '/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const data = await res.json();
+
+        if (data.steps) {
+            results.innerHTML = '<div class="section-label">API Login steps (' + data.steps.length + ')</div>' +
+                data.steps.map((s, i) => {
+                    const isSuccess = s.note && s.note.toLowerCase().includes('success');
+                    const isError = s.note && (s.note.toLowerCase().includes('fail') || s.note.toLowerCase().includes('error'));
+                    const color = isSuccess ? 'var(--green)' : isError ? 'var(--accent)' : 'var(--text-2)';
+                    return `<div class="card" style="margin-bottom:6px;padding:10px 14px;border-color:${isSuccess?'var(--green)':isError?'var(--accent)':'var(--border)'};">
+                        <div style="font-size:12px;font-weight:600;color:${color};">Step ${i+1}: ${esc(s.step)}</div>
+                        <div style="font-size:11px;color:var(--text-3);margin-top:4px;word-break:break-all;">${esc(s.note || '')}</div>
+                    </div>`;
+                }).join('');
+        }
+
+        if (data.ok) {
+            toast('Login successful! Cookies saved.', 'success');
+        } else if (data.error) {
+            toast(data.error, 'error');
+        } else if (data.need_code) {
+            toast('Code sent but no IMAP access — enter code manually', 'error');
+        }
+    } catch (e) {
+        toast('Connection error', 'error');
+        results.innerHTML = '';
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg> Auto Login';
+    document.getElementById('api-user').dataset.accountId = '';
 }
 
 async function importCookies() {

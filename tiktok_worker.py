@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import random
+import time
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
@@ -246,7 +247,7 @@ async def take_debug_screenshot(task_id: int | None = None) -> str | None:
     return None
 
 
-def _test_login_sync(username: str, password: str, proxy: str = "") -> list[dict]:
+def _test_login_sync(username: str, password: str, proxy: str = "", email_password: str = "", imap_server: str = "") -> list[dict]:
     steps = []
     ts = int(datetime.now(timezone.utc).timestamp())
 
