@@ -105,7 +105,21 @@ def _create_driver(proxy_str: str = "") -> uc.Chrome:
         if proxy:
             options.add_argument(f"--proxy-server={proxy}")
 
-    driver = uc.Chrome(options=options, headless=True, use_subprocess=True)
+    chrome_ver = None
+    try:
+        import subprocess
+        out = subprocess.check_output(["google-chrome-stable", "--version"], text=True)
+        chrome_ver = int(out.strip().split()[-1].split(".")[0])
+        logger.debug(f"Chrome version detected: {chrome_ver}")
+    except Exception:
+        pass
+
+    driver = uc.Chrome(
+        options=options,
+        headless=True,
+        use_subprocess=True,
+        version_main=chrome_ver,
+    )
     driver.set_window_size(1280, 720)
     return driver
 
