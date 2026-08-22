@@ -219,6 +219,8 @@ def _create_driver(proxy_str: str = "", force_headless: bool = False) -> uc.Chro
     options = uc.ChromeOptions()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-software-rasterizer")
     options.add_argument("--window-size=1920,1080")
     options.add_argument(f"--user-agent={UA}")
     options.add_argument("--lang=en-US")
@@ -227,6 +229,7 @@ def _create_driver(proxy_str: str = "", force_headless: bool = False) -> uc.Chro
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-popup-blocking")
     options.add_argument("--start-maximized")
+    options.add_argument("--remote-debugging-port=0")
 
     if proxy_str and proxy_str.strip():
         proxy = _parse_proxy_for_selenium(proxy_str)

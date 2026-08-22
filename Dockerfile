@@ -51,7 +51,9 @@ RUN pip install --no-cache-dir setuptools && pip install --no-cache-dir -r requi
 
 COPY . .
 
-RUN mkdir -p logs screenshots sessions
+RUN mkdir -p logs screenshots sessions /dev/shm && chmod 1777 /dev/shm
+
+ENV DISPLAY=:99
 
 EXPOSE 8080
 
