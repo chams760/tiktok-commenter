@@ -319,15 +319,53 @@ def _test_login_sync(username: str, password: str, proxy: str = "") -> list[dict
         elif "verify" in body_text.lower() or "verify it" in body_text.lower():
             snap(driver, "verify_detected", "VERIFICATION page detected, clicking Email...")
 
-            try:
-                email_opt = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH, '//div[contains(text(),"Email") or contains(text(),"email")]'))
-                )
-                ActionChains(driver).move_to_element(email_opt).click().perform()
-                _human_delay(2, 4)
-                snap(driver, "verify_email_clicked", "Clicked Email option, waiting for code input...")
-            except Exception:
-                snap(driver, "verify_email_not_found", "Could not find Email option")
+            snap(driver, "verify_page_source", f"Page text: {body_text[:500]}")
+
+            email_clicked = False
+            selectors = [
+                (By.XPATH, '//*[contains(text(),"mail") and not(contains(text(),"@"))]'),
+                (By.XPATH, '//div[contains(@class,"verify")]//div[contains(text(),"mail")]'),
+                (By.XPATH, '//*[contains(text(),"Email") or contains(text(),"email") or contains(text(),"EMAIL")]'),
+                (By.XPATH, '//a[contains(text(),"mail")]'),
+                (By.XPATH, '//button[contains(text(),"mail")]'),
+                (By.XPATH, '//span[contains(text(),"mail")]'),
+                (By.XPATH, '//p[contains(text(),"mail")]'),
+                (By.XPATH, '//label[contains(text(),"mail")]'),
+                (By.CSS_SELECTOR, '[data-e2e*="email"], [class*="email"], [class*="Email"]'),
+            ]
+            for by, sel in selectors:
+                try:
+                    elements = driver.find_elements(by, sel)
+                    for el in elements:
+                        if el.is_displayed() and el.size['height'] > 0:
+                            ActionChains(driver).move_to_element(el).pause(0.5).click().perform()
+                            _human_delay(2, 4)
+                            snap(driver, "verify_email_clicked", f"Clicked Email option via: {sel}")
+                            email_clicked = True
+                            break
+                    if email_clicked:
+                        break
+                except Exception:
+                    continue
+
+            if not email_clicked:
+                try:
+                    all_clickable = driver.find_elements(By.XPATH, '//div[@role="button" or @tabindex] | //button | //a[not(@href)]')
+                    for el in all_clickable:
+                        txt = el.text.lower()
+                        if 'mail' in txt or 'email' in txt or 'почт' in txt:
+                            ActionChains(driver).move_to_element(el).pause(0.5).click().perform()
+                            _human_delay(2, 4)
+                            snap(driver, "verify_email_clicked_fallback", f"Clicked via fallback: {el.text[:50]}")
+                            email_clicked = True
+                            break
+                except Exception:
+                    pass
+
+            if not email_clicked:
+                snap(driver, "verify_email_not_found", f"Could not find Email option. Page text: {body_text[:300]}")
+                _pending_verification[username] = {"driver": driver, "steps": steps, "snap": snap}
+                steps[-1]["note"] = "COULD_NOT_CLICK_EMAIL - check screenshot for page layout"
                 return steps
 
             _pending_verification[username] = {"driver": driver, "steps": steps, "snap": snap}
