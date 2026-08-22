@@ -230,18 +230,19 @@ for (var prop in document) {
 """
 
 
-def _make_proxy_auth_extension(host, port, username, password):
-    import zipfile
+def _make_proxy_auth_extension_dir(host, port, username, password):
     import tempfile
-    manifest = json.dumps({
+    ext_dir = tempfile.mkdtemp(prefix="proxy_ext_")
+    manifest = {
         "version": "1.0.0",
         "manifest_version": 2,
-        "name": "Proxy Auth",
-        "permissions": ["proxy", "tabs", "unlimitedStorage", "storage",
-                        "<all_urls>", "webRequest", "webRequestBlocking"],
+        "name": "Proxy Auth Helper",
+        "permissions": ["proxy", "<all_urls>", "webRequest", "webRequestBlocking"],
         "background": {"scripts": ["background.js"]},
         "minimum_chrome_version": "22.0.0"
-    })
+    }
+    with open(os.path.join(ext_dir, "manifest.json"), "w") as f:
+        json.dump(manifest, f)
     background = f"""
     var config = {{
         mode: "fixed_servers",
@@ -251,17 +252,17 @@ def _make_proxy_auth_extension(host, port, username, password):
         }}
     }};
     chrome.proxy.settings.set({{value: config, scope: "regular"}}, function(){{}});
-    function callbackFn(details) {{
-        return {{authCredentials: {{username: "{username}", password: "{password}"}}}};
-    }}
-    chrome.webRequest.onAuthRequired.addListener(callbackFn, {{urls: ["<all_urls>"]}}, ['blocking']);
+    chrome.webRequest.onAuthRequired.addListener(
+        function(details) {{
+            return {{authCredentials: {{username: "{username}", password: "{password}"}}}};
+        }},
+        {{urls: ["<all_urls>"]}},
+        ["blocking"]
+    );
     """
-    ext_dir = tempfile.mkdtemp()
-    ext_path = os.path.join(ext_dir, "proxy_auth.zip")
-    with zipfile.ZipFile(ext_path, 'w') as zp:
-        zp.writestr("manifest.json", manifest)
-        zp.writestr("background.js", background)
-    return ext_path
+    with open(os.path.join(ext_dir, "background.js"), "w") as f:
+        f.write(background)
+    return ext_dir
 
 
 def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
@@ -282,10 +283,14 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
 
     proxy_has_auth = False
     if proxy_str and proxy_str.strip():
-        proxy = _parse_proxy_for_selenium(proxy_str)
-        if proxy:
-            options.add_argument(f"--proxy-server={proxy}")
-            proxy_has_auth = "://" in proxy and "@" in proxy
+        parsed = _parse_proxy_parts(proxy_str)
+        if parsed:
+            host, port, user, passw = parsed
+            if user and passw:
+                proxy_has_auth = True
+                ext_dir = _make_proxy_auth_extension_dir(host, port, user, passw)
+                options.add_argument(f"--load-extension={ext_dir}")
+            options.add_argument(f"--proxy-server=http://{host}:{port}")
 
     chrome_binary = None
     for path in ["/usr/bin/google-chrome-stable", "/usr/bin/google-chrome", "/usr/bin/chromium"]:
