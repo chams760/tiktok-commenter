@@ -22,22 +22,28 @@ _xvfb_proc = None
 def _ensure_xvfb():
     global _xvfb_proc
     if _xvfb_proc and _xvfb_proc.poll() is None:
-        return
+        return True
     display = os.environ.get("DISPLAY")
     if display:
-        return
+        return True
     try:
         _xvfb_proc = subprocess.Popen(
-            ["Xvfb", ":99", "-screen", "0", "1920x1080x24", "-nolisten", "tcp"],
+            ["Xvfb", ":99", "-screen", "0", "1920x1080x24", "-nolisten", "tcp", "-ac"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
+        time.sleep(0.5)
+        if _xvfb_proc.poll() is not None:
+            logger.warning("Xvfb exited immediately, falling back to headless")
+            return False
         os.environ["DISPLAY"] = ":99"
-        time.sleep(1)
         logger.info("Xvfb started on :99")
+        return True
     except FileNotFoundError:
-        logger.warning("Xvfb not found, falling back to headless mode")
+        logger.warning("Xvfb not found, using headless mode")
+        return False
     except Exception as e:
-        logger.warning(f"Xvfb start failed: {e}, falling back to headless")
+        logger.warning(f"Xvfb failed: {e}, using headless")
+        return False
 
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), "screenshots")
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
@@ -206,9 +212,9 @@ try {
 """
 
 
-def _create_driver(proxy_str: str = "") -> uc.Chrome:
-    _ensure_xvfb()
-    use_headless = not os.environ.get("DISPLAY")
+def _create_driver(proxy_str: str = "", force_headless: bool = False) -> uc.Chrome:
+    has_display = _ensure_xvfb()
+    use_headless = force_headless or not has_display
 
     options = uc.ChromeOptions()
     options.add_argument("--no-sandbox")
@@ -713,23 +719,22 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
 
     driver = None
     try:
-        driver = _create_driver(proxy)
-        step("init", f"Browser created | proxy: {bool(proxy)}")
-
-        # Check IP
         try:
-            driver.get("https://api.ipify.org?format=json")
-            _human_delay(1, 2)
-            ip_text = driver.find_element(By.TAG_NAME, "body").text
-            step("ip", f"IP: {ip_text}")
-        except Exception:
-            step("ip", "Could not check IP")
+            driver = _create_driver(proxy)
+        except Exception as e:
+            step("driver_error", f"Chrome failed with xvfb: {e}. Trying headless...")
+            try:
+                driver = _create_driver(proxy, force_headless=True)
+            except Exception as e2:
+                step("driver_fatal", str(e2))
+                return {"ok": False, "steps": steps, "error": f"Chrome failed: {e2}"}
+        step("init", f"Browser created | proxy: {bool(proxy)}")
 
         # Check saved cookies first
         has_cookies = _load_cookies(driver, username)
         if has_cookies:
             driver.get("https://www.tiktok.com/foryou")
-            _human_delay(3, 5)
+            time.sleep(3)
             if "login" not in driver.current_url.lower():
                 step("cookie_login", "LOGIN SUCCESS via saved cookies!")
                 driver.quit()
@@ -738,23 +743,21 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
 
         # Step 1: Warm up — visit homepage
         driver.get("https://www.tiktok.com")
-        _human_delay(3, 5)
+        time.sleep(3)
         _dismiss_cookie_banner(driver)
-        _random_mouse_move(driver, 5)
-        _human_delay(1, 2)
-        step("homepage", "Homepage visited, cookies collected")
+        _random_mouse_move(driver, 3)
+        step("homepage", "Homepage visited")
 
         # Step 2: Go to login page
         driver.get("https://www.tiktok.com/login/phone-or-email/email")
-        _human_delay(3, 5)
+        time.sleep(3)
         _dismiss_cookie_banner(driver)
-        _human_delay(1, 2)
+        time.sleep(1)
         _dismiss_cookie_banner(driver)
-        _random_mouse_move(driver, 3)
         snap(driver, "login_page")
-        step("login_page", f"Login page loaded")
+        step("login_page", "Login page loaded")
 
-        # Step 3: Fill credentials like a human
+        # Step 3: Fill credentials
         try:
             email_input = WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="username"]'))
@@ -764,11 +767,10 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             driver.quit()
             return {"ok": False, "steps": steps, "error": "Email input not found"}
 
-        _random_mouse_move(driver, 2)
         ActionChains(driver).move_to_element(email_input).click().perform()
-        _human_delay(0.5, 1.0)
+        _human_delay(0.2, 0.4)
         _human_type(email_input, username)
-        _human_delay(0.5, 1.0)
+        _human_delay(0.3, 0.5)
 
         try:
             pass_input = driver.find_element(By.CSS_SELECTOR, 'input[type="password"]')
@@ -777,15 +779,13 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             driver.quit()
             return {"ok": False, "steps": steps, "error": "Password input not found"}
 
-        _random_mouse_move(driver, 1)
         ActionChains(driver).move_to_element(pass_input).click().perform()
-        _human_delay(0.3, 0.6)
+        _human_delay(0.2, 0.4)
         _human_type(pass_input, password)
         step("credentials", "Credentials filled")
 
         # Step 4: Click login button
-        _random_mouse_move(driver, 2)
-        _human_delay(0.8, 1.5)
+        _human_delay(0.5, 1.0)
         try:
             login_btn = driver.find_element(By.CSS_SELECTOR, 'button[data-e2e="login-button"]')
         except Exception:
@@ -794,12 +794,12 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             return {"ok": False, "steps": steps, "error": "Login button not found"}
 
         ActionChains(driver).move_to_element(login_btn).click().perform()
-        _human_delay(5, 8)
+        time.sleep(5)
         _dismiss_cookie_banner(driver)
         snap(driver, "after_login_click")
 
         body_text = driver.find_element(By.TAG_NAME, "body").text
-        step("after_login", f"URL: {driver.current_url} | Body preview: {body_text[:200]}")
+        step("after_login", f"URL: {driver.current_url} | Body: {body_text[:200]}")
 
         # Check: direct login success?
         if "login" not in driver.current_url.lower() and "verify" not in body_text.lower():
@@ -812,8 +812,8 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         page_src = driver.page_source.lower()
         if "captcha" in page_src or "puzzle" in page_src:
             snap(driver, "captcha_detected")
-            step("captcha", "CAPTCHA detected on login page. Waiting 10s for manual solve or auto-dismiss...")
-            _human_delay(8, 12)
+            step("captcha", "CAPTCHA detected. Waiting 5s...")
+            time.sleep(5)
             body_text = driver.find_element(By.TAG_NAME, "body").text
             if "login" not in driver.current_url.lower():
                 _save_cookies(driver, username)
@@ -841,7 +841,7 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
 
         # Step 6: Click Email verification option via UI
         _dismiss_cookie_banner(driver)
-        _human_delay(1, 2)
+        time.sleep(1)
 
         email_clicked = driver.execute_script("""
             function findAndClick() {
@@ -893,11 +893,11 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
 
         step("email_option", f"Email click result: {email_clicked}")
         if email_clicked and email_clicked.startswith("clicked:"):
-            _human_delay(2, 4)
+            time.sleep(2)
             snap(driver, "after_email_click")
 
         # Step 7: Click "Send code" button if visible
-        _human_delay(1, 2)
+        time.sleep(1)
         send_result = driver.execute_script("""
             var btns = document.querySelectorAll('button, div[role="button"], a[role="button"], [class*="send"], [class*="Send"]');
             for (var i = 0; i < btns.length; i++) {
@@ -923,7 +923,7 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         snap(driver, "after_send_click")
 
         # Step 8: Wait a bit and check for captcha
-        _human_delay(2, 3)
+        time.sleep(2)
         page_src = driver.page_source.lower()
         if "captcha" in page_src or "puzzle" in page_src or "slider" in page_src:
             snap(driver, "captcha_verify")
@@ -940,7 +940,7 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             step("captcha_info", f"Captcha details: {captcha_info}")
 
         # Step 9: Store session, wait for code
-        _human_delay(3, 5)
+        time.sleep(2)
         new_body = driver.find_element(By.TAG_NAME, "body").text
         snap(driver, "waiting_for_code")
         step("waiting", f"Current page state: {new_body[:300]}")
@@ -1090,9 +1090,16 @@ def _browser_submit_manual_code_sync(username: str, code: str) -> dict:
 async def browser_fetch_login(username: str, password: str, proxy: str = "",
                               email_password: str = "", imap_server: str = "") -> dict:
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        _executor, _browser_fetch_login_sync, username, password, proxy, email_password, imap_server
-    )
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(
+                _executor, _browser_fetch_login_sync, username, password, proxy, email_password, imap_server
+            ),
+            timeout=120
+        )
+    except asyncio.TimeoutError:
+        return {"ok": False, "steps": [{"step": "timeout", "note": "Login timed out after 120s"}],
+                "error": "Login timed out after 120 seconds"}
 
 
 async def browser_submit_manual_code(username: str, code: str) -> dict:
