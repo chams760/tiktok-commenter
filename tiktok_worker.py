@@ -1051,9 +1051,43 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         _human_type(email_input, username)
         _human_delay(0.3, 0.5)
 
-        try:
-            pass_input = driver.find_element(By.CSS_SELECTOR, 'input[type="password"]')
-        except Exception:
+        pass_input = None
+        for sel in [
+            'input[type="password"]',
+            'input[name="password"]',
+            'input[placeholder*="assword" i]',
+            'input[autocomplete="current-password"]',
+        ]:
+            try:
+                pass_input = driver.find_element(By.CSS_SELECTOR, sel)
+                if pass_input:
+                    break
+            except Exception:
+                continue
+        if not pass_input:
+            # JS fallback: find second visible input or any password-like input
+            try:
+                pass_input_data = driver.execute_script("""
+                    var inputs = document.querySelectorAll('input');
+                    var visible = [];
+                    for (var i = 0; i < inputs.length; i++) {
+                        if (inputs[i].offsetHeight > 0 && inputs[i].type !== 'hidden') {
+                            visible.push({idx: i, type: inputs[i].type, name: inputs[i].name, ph: inputs[i].placeholder});
+                        }
+                    }
+                    return JSON.stringify(visible);
+                """)
+                step("pass_scan", f"Visible inputs: {pass_input_data}")
+                # Try getting second visible input as password
+                inputs = driver.find_elements(By.CSS_SELECTOR, 'input')
+                visible_inputs = [i for i in inputs if i.is_displayed() and i.get_attribute("type") != "hidden"]
+                if len(visible_inputs) >= 2:
+                    pass_input = visible_inputs[1]
+                    step("pass_fallback", "Using second visible input as password field")
+            except Exception:
+                pass
+        if not pass_input:
+            snap(driver, "no_pass_field")
             step("error", "Password input not found")
             driver.quit()
             return {"ok": False, "steps": steps, "error": "Password input not found"}
