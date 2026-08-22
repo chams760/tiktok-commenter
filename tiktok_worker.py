@@ -197,7 +197,6 @@ def _create_driver(proxy_str: str = "") -> uc.Chrome:
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--disable-infobars")
     options.add_argument("--disable-popup-blocking")
-    options.add_argument("--headless=new")
 
     if proxy_str and proxy_str.strip():
         proxy = _parse_proxy_for_selenium(proxy_str)
@@ -214,22 +213,34 @@ def _create_driver(proxy_str: str = "") -> uc.Chrome:
 
     driver = uc.Chrome(
         options=options,
-        headless=False,
+        headless=True,
         use_subprocess=True,
         version_main=chrome_ver,
     )
     driver.set_window_size(1920, 1080)
 
-    # Inject stealth scripts
+    # Apply selenium-stealth
     try:
-        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _STEALTH_JS})
-    except Exception:
+        from selenium_stealth import stealth
+        stealth(driver,
+            languages=["en-US", "en"],
+            vendor="Google Inc.",
+            platform="Win32",
+            webgl_vendor="Intel Inc.",
+            renderer="Intel Iris OpenGL Engine",
+            fix_hairline=True,
+        )
+    except Exception as e:
+        logger.debug(f"selenium-stealth failed: {e}, using manual JS stealth")
         try:
-            driver.execute_script(_STEALTH_JS)
+            driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _STEALTH_JS})
         except Exception:
-            pass
+            try:
+                driver.execute_script(_STEALTH_JS)
+            except Exception:
+                pass
 
-    logger.info(f"Chrome driver created | headless={use_headless} | proxy={bool(proxy_str)}")
+    logger.info(f"Chrome driver created | proxy={bool(proxy_str)}")
     return driver
 
 
