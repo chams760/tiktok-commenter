@@ -4,7 +4,8 @@ import random
 from datetime import datetime, timezone
 
 from loguru import logger
-from playwright.async_api import async_playwright, Page, Browser
+from playwright.async_api import async_playwright, Page, Browser, BrowserContext
+from playwright_stealth import stealth_async
 
 import config
 import database as db
@@ -14,7 +15,59 @@ os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 
 _active_pages: dict[int, Page] = {}
 
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+_USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
+]
+
+_VIEWPORTS = [
+    {"width": 1920, "height": 1080},
+    {"width": 1536, "height": 864},
+    {"width": 1440, "height": 900},
+    {"width": 1366, "height": 768},
+]
+
+_TIMEZONES = ["America/New_York", "America/Chicago", "America/Los_Angeles", "Europe/London", "Europe/Berlin"]
+_LOCALES = ["en-US", "en-GB", "en-CA"]
+
+
+def _random_profile() -> dict:
+    return {
+        "user_agent": random.choice(_USER_AGENTS),
+        "viewport": random.choice(_VIEWPORTS),
+        "timezone_id": random.choice(_TIMEZONES),
+        "locale": random.choice(_LOCALES),
+    }
+
+
+async def _human_delay(min_ms=800, max_ms=2500):
+    await asyncio.sleep(random.uniform(min_ms, max_ms) / 1000)
+
+
+async def _human_type(page: Page, selector: str, text: str):
+    el = page.locator(selector)
+    await el.click()
+    await _human_delay(300, 600)
+    for char in text:
+        await el.press(char) if len(char) == 1 else await el.type(char)
+        await asyncio.sleep(random.uniform(0.04, 0.18))
+    await _human_delay(200, 500)
+
+
+async def _create_stealth_context(browser: Browser, proxy_config: dict | None = None) -> BrowserContext:
+    profile = _random_profile()
+    ctx_opts = {
+        "user_agent": profile["user_agent"],
+        "viewport": profile["viewport"],
+        "locale": profile["locale"],
+        "timezone_id": profile["timezone_id"],
+        "color_scheme": "light",
+    }
+    ctx = await browser.new_context(**ctx_opts)
+    return ctx
 
 
 def parse_proxy(proxy_str: str) -> dict | None:
@@ -84,17 +137,25 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
         steps.append({"step": step_name, "file": fname, "note": info, "url": page.url})
 
     async with async_playwright() as pw:
-        launch_opts = {"headless": True}
+        launch_opts = {
+            "headless": True,
+            "args": [
+                "--disable-blink-features=AutomationControlled",
+                "--no-first-run",
+                "--no-default-browser-check",
+            ],
+        }
         if proxy_config:
             launch_opts["proxy"] = proxy_config
         browser = await pw.chromium.launch(**launch_opts)
-        ctx = await browser.new_context(user_agent=UA, viewport={"width": 1920, "height": 1080})
+        ctx = await _create_stealth_context(browser, proxy_config)
         page = await ctx.new_page()
+        await stealth_async(page)
 
         try:
-            await page.goto("https://www.tiktok.com/login/phone-or-email/email")
-            await page.wait_for_timeout(4000)
-            await snap(page, "login_page", "Login page loaded")
+            await page.goto("https://www.tiktok.com/login/phone-or-email/email", wait_until="domcontentloaded")
+            await _human_delay(3000, 5000)
+            await snap(page, "login_page", "Login page loaded (stealth mode)")
 
             email_input = page.locator('input[name="username"]')
             count = await email_input.count()
@@ -102,8 +163,7 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
                 await snap(page, "no_email_field", "Email input not found on page")
                 return steps
 
-            await email_input.fill(username)
-            await page.wait_for_timeout(500)
+            await _human_type(page, 'input[name="username"]', username)
             await snap(page, "email_filled", f"Email filled: {username}")
 
             pass_input = page.locator('input[type="password"]')
@@ -112,9 +172,10 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
                 await snap(page, "no_pass_field", "Password input not found")
                 return steps
 
-            await pass_input.fill(password)
-            await page.wait_for_timeout(500)
+            await _human_type(page, 'input[type="password"]', password)
             await snap(page, "password_filled", "Password filled")
+
+            await _human_delay(500, 1200)
 
             login_btn = page.locator('button[data-e2e="login-button"]')
             count = await login_btn.count()
@@ -124,10 +185,10 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
                 return steps
 
             await login_btn.click()
-            await page.wait_for_timeout(3000)
+            await _human_delay(3000, 5000)
             await snap(page, "after_click", "After clicking login button")
 
-            await page.wait_for_timeout(5000)
+            await _human_delay(5000, 8000)
             await snap(page, "final_state", f"Final URL: {page.url}")
 
             if "login" not in page.url.lower():
@@ -156,19 +217,18 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
 
 async def login_account(page: Page, username: str, password: str) -> bool:
     try:
-        await page.goto("https://www.tiktok.com/login/phone-or-email/email")
-        await page.wait_for_timeout(3000)
+        await stealth_async(page)
+        await page.goto("https://www.tiktok.com/login/phone-or-email/email", wait_until="domcontentloaded")
+        await _human_delay(3000, 5000)
 
-        email_input = page.locator('input[name="username"]')
-        await email_input.fill(username)
-
-        pass_input = page.locator('input[type="password"]')
-        await pass_input.fill(password)
+        await _human_type(page, 'input[name="username"]', username)
+        await _human_type(page, 'input[type="password"]', password)
+        await _human_delay(500, 1200)
 
         login_btn = page.locator('button[data-e2e="login-button"]')
         await login_btn.click()
 
-        await page.wait_for_timeout(5000)
+        await _human_delay(5000, 8000)
 
         if "login" not in page.url.lower():
             logger.info(f"Вход выполнен: {username}")
@@ -247,9 +307,13 @@ async def run_task(task_id: int):
         comments_failed = task["comments_failed"]
 
         try:
-            browser = await pw.chromium.launch(headless=True)
-            probe_ctx = await browser.new_context(user_agent=UA, viewport={"width": 1920, "height": 1080})
+            browser = await pw.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled", "--no-first-run", "--no-default-browser-check"],
+            )
+            probe_ctx = await _create_stealth_context(browser)
             probe_page = await probe_ctx.new_page()
+            await stealth_async(probe_page)
             video_urls = await search_videos(probe_page, task["search_query"], task["max_comments"])
             await probe_ctx.close()
             await browser.close()
@@ -275,14 +339,18 @@ async def run_task(task_id: int):
                     return
 
                 proxy_config = parse_proxy(account.get("proxy", ""))
-                launch_opts = {"headless": True}
+                launch_opts = {
+                    "headless": True,
+                    "args": ["--disable-blink-features=AutomationControlled", "--no-first-run", "--no-default-browser-check"],
+                }
                 if proxy_config:
                     launch_opts["proxy"] = proxy_config
                     logger.info(f"Используется прокси: {proxy_config['server']} для {account['username']}")
 
                 browser = await pw.chromium.launch(**launch_opts)
-                ctx = await browser.new_context(user_agent=UA, viewport={"width": 1920, "height": 1080})
+                ctx = await _create_stealth_context(browser, proxy_config)
                 page = await ctx.new_page()
+                await stealth_async(page)
 
                 _active_pages[task_id] = page
 
