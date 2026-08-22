@@ -91,6 +91,17 @@ def _random_mouse_move(driver: uc.Chrome, steps=3):
     _human_delay(0.1, 0.3)
 
 
+def _dismiss_cookie_banner(driver: uc.Chrome):
+    try:
+        buttons = driver.find_elements(By.XPATH, '//button[contains(text(),"Decline optional cookies") or contains(text(),"Allow all") or contains(text(),"Accept")]')
+        if buttons:
+            buttons[-1].click()
+            _human_delay(1, 2)
+            logger.debug("Cookie banner dismissed")
+    except Exception:
+        pass
+
+
 def _create_driver(proxy_str: str = "") -> uc.Chrome:
     options = uc.ChromeOptions()
     options.add_argument("--no-sandbox")
@@ -251,6 +262,7 @@ def _test_login_sync(username: str, password: str, proxy: str = "") -> list[dict
 
         driver.get("https://www.tiktok.com/login/phone-or-email/email")
         _human_delay(3, 5)
+        _dismiss_cookie_banner(driver)
         _random_mouse_move(driver, 3)
         snap(driver, "login_page", "Login page loaded (undetected-chromedriver)")
 
@@ -296,16 +308,26 @@ def _test_login_sync(username: str, password: str, proxy: str = "") -> list[dict
         _human_delay(5, 8)
         snap(driver, "final_state", f"Final URL: {driver.current_url}")
 
+        body_text = driver.find_element(By.TAG_NAME, "body").text
+        page_src = driver.page_source.lower()
+
         if "login" not in driver.current_url.lower():
             steps[-1]["note"] = "LOGIN SUCCESS - redirected away from login page"
             _save_cookies(driver, username)
+        elif "verify" in body_text.lower() or "verify it" in body_text.lower():
+            note = "VERIFICATION REQUIRED - TikTok wants to confirm your identity."
+            if "email" in body_text.lower():
+                note += " Method: Email verification code."
+            if "phone" in body_text.lower():
+                note += " Method: Phone verification."
+            note += " Login credentials are CORRECT. You need to verify the account from a real browser first, then import cookies."
+            steps[-1]["note"] = note
         else:
-            body_text = driver.find_element(By.TAG_NAME, "body").text
             note = "LOGIN FAILED - still on login page."
             if "maximum" in body_text.lower() or "too many" in body_text.lower():
                 note += " RATE LIMITED: Too many attempts."
-            if "captcha" in driver.page_source.lower() or "verify" in driver.page_source.lower():
-                note += " CAPTCHA/Verification detected."
+            if "captcha" in page_src or "puzzle" in page_src:
+                note += " CAPTCHA detected."
             steps[-1]["note"] = note
 
     except Exception as e:
@@ -345,6 +367,7 @@ def _login_account_sync(driver: uc.Chrome, username: str, password: str) -> bool
 
     driver.get("https://www.tiktok.com/login/phone-or-email/email")
     time.sleep(random.uniform(3, 5))
+    _dismiss_cookie_banner(driver)
     _random_mouse_move(driver, 3)
 
     try:
