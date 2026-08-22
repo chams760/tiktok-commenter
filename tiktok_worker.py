@@ -1099,27 +1099,84 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
 
         # Step 4: Click login button
         _human_delay(0.5, 1.0)
-        try:
-            login_btn = driver.find_element(By.CSS_SELECTOR, 'button[data-e2e="login-button"]')
-        except Exception:
+        login_btn = None
+        for btn_sel in [
+            'button[data-e2e="login-button"]',
+            'button[type="submit"]',
+        ]:
+            try:
+                login_btn = driver.find_element(By.CSS_SELECTOR, btn_sel)
+                if login_btn:
+                    break
+            except Exception:
+                continue
+        if not login_btn:
+            try:
+                login_btn = driver.execute_script("""
+                    var btns = document.querySelectorAll('button');
+                    for (var i = 0; i < btns.length; i++) {
+                        var t = (btns[i].innerText || '').trim().toLowerCase();
+                        if ((t === 'log in' || t === 'login' || t === 'войти') && btns[i].offsetHeight > 0) {
+                            return btns[i];
+                        }
+                    }
+                    return null;
+                """)
+            except Exception:
+                pass
+        if not login_btn:
             step("error", "Login button not found")
             driver.quit()
             return {"ok": False, "steps": steps, "error": "Login button not found"}
 
         ActionChains(driver).move_to_element(login_btn).click().perform()
-        time.sleep(5)
+        time.sleep(8)
         _dismiss_cookie_banner(driver)
         snap(driver, "after_login_click")
 
         body_text = driver.find_element(By.TAG_NAME, "body").text
         step("after_login", f"URL: {driver.current_url} | Body: {body_text[:200]}")
 
-        # Check: direct login success?
-        if "login" not in driver.current_url.lower() and "verify" not in body_text.lower():
+        # Check login status properly (modal login doesn't change URL)
+        def _is_logged_in():
+            try:
+                # Reload page to get fresh state
+                driver.get("https://www.tiktok.com/foryou")
+                time.sleep(5)
+                b = driver.find_element(By.TAG_NAME, "body").text.lower()
+                src = driver.page_source.lower()
+                # If page has user profile elements and no "Log in" button in header
+                has_profile = any(x in src for x in [
+                    'data-e2e="profile-icon"', 'avatar', 'sidebar-profile',
+                    '"uniqueId":', 'data-e2e="nav-profile"'
+                ])
+                # Check body doesn't have a prominent Log in button
+                has_login_btn = bool(driver.execute_script("""
+                    var btns = document.querySelectorAll('[data-e2e="top-login-button"], header button');
+                    for (var i = 0; i < btns.length; i++) {
+                        var t = (btns[i].innerText || '').trim().toLowerCase();
+                        if (t === 'log in' || t === 'login') return true;
+                    }
+                    return false;
+                """))
+                return has_profile and not has_login_btn
+            except Exception:
+                return False
+
+        if _is_logged_in():
             _save_cookies(driver, username)
-            step("success", "Direct login success!")
+            step("success", "LOGIN SUCCESS — profile detected!")
             driver.quit()
             return {"ok": True, "steps": steps}
+
+        # Re-read body after foryou check
+        body_text = driver.find_element(By.TAG_NAME, "body").text
+        # If still has "Log in" button -> login failed silently
+        if "verify" not in body_text.lower() and "code" not in body_text.lower():
+            snap(driver, "login_failed_silent")
+            step("failed_silent", f"Login failed silently. Body: {body_text[:300]}")
+            driver.quit()
+            return {"ok": False, "steps": steps, "error": "Login failed — TikTok didn't accept credentials or blocked the attempt"}
 
         # Check: captcha on login page?
         page_src = driver.page_source.lower()
