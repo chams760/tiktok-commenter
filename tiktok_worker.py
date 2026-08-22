@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import random
+import subprocess
 import time
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +16,28 @@ import undetected_chromedriver as uc
 
 import config
 import database as db
+
+_xvfb_proc = None
+
+def _ensure_xvfb():
+    global _xvfb_proc
+    if _xvfb_proc and _xvfb_proc.poll() is None:
+        return
+    display = os.environ.get("DISPLAY")
+    if display:
+        return
+    try:
+        _xvfb_proc = subprocess.Popen(
+            ["Xvfb", ":99", "-screen", "0", "1920x1080x24", "-nolisten", "tcp"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        os.environ["DISPLAY"] = ":99"
+        time.sleep(1)
+        logger.info("Xvfb started on :99")
+    except FileNotFoundError:
+        logger.warning("Xvfb not found, falling back to headless mode")
+    except Exception as e:
+        logger.warning(f"Xvfb start failed: {e}, falling back to headless")
 
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), "screenshots")
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
@@ -132,14 +155,72 @@ def _dismiss_cookie_banner(driver: uc.Chrome):
         pass
 
 
+_STEALTH_JS = """
+// Override webdriver
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+
+// Chrome runtime
+window.chrome = {runtime: {}, loadTimes: function(){}, csi: function(){}, app: {isInstalled: false, getDetails: function(){}, getIsInstalled: function(){}}};
+
+// Plugins
+Object.defineProperty(navigator, 'plugins', {
+    get: () => [
+        {name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format'},
+        {name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: ''},
+        {name: 'Native Client', filename: 'internal-nacl-plugin', description: ''},
+    ]
+});
+
+// Languages
+Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+
+// Platform
+Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
+
+// Hardware concurrency
+Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
+
+// Device memory
+Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
+
+// WebGL vendor/renderer
+const getParameter = WebGLRenderingContext.prototype.getParameter;
+WebGLRenderingContext.prototype.getParameter = function(param) {
+    if (param === 37445) return 'Google Inc. (NVIDIA)';
+    if (param === 37446) return 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 Direct3D11 vs_5_0 ps_5_0, D3D11)';
+    return getParameter.call(this, param);
+};
+
+// Permissions
+const origQuery = window.Notification && Notification.permission;
+if (window.Notification) {
+    Notification.requestPermission = function() { return Promise.resolve('default'); };
+}
+
+// Iframe contentWindow
+try {
+    Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
+        get: function() { return window; }
+    });
+} catch(e) {}
+"""
+
+
 def _create_driver(proxy_str: str = "") -> uc.Chrome:
+    _ensure_xvfb()
+    use_headless = not os.environ.get("DISPLAY")
+
     options = uc.ChromeOptions()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1280,720")
+    options.add_argument("--window-size=1920,1080")
     options.add_argument(f"--user-agent={UA}")
     options.add_argument("--lang=en-US")
     options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--disable-infobars")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-popup-blocking")
+    options.add_argument("--start-maximized")
 
     if proxy_str and proxy_str.strip():
         proxy = _parse_proxy_for_selenium(proxy_str)
@@ -148,7 +229,6 @@ def _create_driver(proxy_str: str = "") -> uc.Chrome:
 
     chrome_ver = None
     try:
-        import subprocess
         out = subprocess.check_output(["google-chrome-stable", "--version"], text=True)
         chrome_ver = int(out.strip().split()[-1].split(".")[0])
         logger.debug(f"Chrome version detected: {chrome_ver}")
@@ -157,11 +237,22 @@ def _create_driver(proxy_str: str = "") -> uc.Chrome:
 
     driver = uc.Chrome(
         options=options,
-        headless=True,
+        headless=use_headless,
         use_subprocess=True,
         version_main=chrome_ver,
     )
-    driver.set_window_size(1280, 720)
+    driver.set_window_size(1920, 1080)
+
+    # Inject stealth scripts
+    try:
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _STEALTH_JS})
+    except Exception:
+        try:
+            driver.execute_script(_STEALTH_JS)
+        except Exception:
+            pass
+
+    logger.info(f"Chrome driver created | headless={use_headless} | proxy={bool(proxy_str)}")
     return driver
 
 
