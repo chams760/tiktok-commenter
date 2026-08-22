@@ -827,10 +827,17 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                 driver.quit()
                 return {"ok": True, "steps": steps}
 
+        # Check rate limit
+        if "maximum" in body_text.lower() or "too many" in body_text.lower():
+            snap(driver, "rate_limited")
+            step("rate_limited", "Account rate limited. Wait 2-4 hours or use a different account/proxy.")
+            driver.quit()
+            return {"ok": False, "steps": steps, "error": "Rate limited — wait 2-4 hours or use different account/proxy"}
+
         # Step 5: Handle verification page
         if "verify" not in body_text.lower() and "code" not in body_text.lower():
             snap(driver, "login_failed")
-            step("failed", f"Login failed, no verify page. Body: {body_text[:300]}")
+            step("failed", f"Login failed. Body: {body_text[:300]}")
             driver.quit()
             return {"ok": False, "steps": steps, "error": "Login failed"}
 
