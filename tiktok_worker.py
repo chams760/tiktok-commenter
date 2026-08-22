@@ -18,32 +18,8 @@ os.makedirs(SESSIONS_DIR, exist_ok=True)
 
 _active_pages: dict[int, Page] = {}
 
-_USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:128.0) Gecko/20100101 Firefox/128.0",
-    "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
-]
-
-_VIEWPORTS = [
-    {"width": 1920, "height": 1080},
-    {"width": 1536, "height": 864},
-    {"width": 1440, "height": 900},
-    {"width": 1366, "height": 768},
-]
-
-_TIMEZONES = ["America/New_York", "America/Chicago", "America/Los_Angeles", "Europe/London", "Europe/Berlin"]
-_LOCALES = ["en-US", "en-GB", "en-CA"]
-
-
-def _random_profile() -> dict:
-    return {
-        "user_agent": random.choice(_USER_AGENTS),
-        "viewport": random.choice(_VIEWPORTS),
-        "timezone_id": random.choice(_TIMEZONES),
-        "locale": random.choice(_LOCALES),
-    }
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+_VIEWPORT = {"width": 1280, "height": 720}
 
 
 async def _human_delay(min_ms=800, max_ms=2500):
@@ -120,15 +96,12 @@ async def _apply_stealth(page: Page):
 
 
 async def _create_stealth_context(browser: Browser, proxy_config: dict | None = None) -> BrowserContext:
-    profile = _random_profile()
-    ctx_opts = {
-        "user_agent": profile["user_agent"],
-        "viewport": profile["viewport"],
-        "locale": profile["locale"],
-        "timezone_id": profile["timezone_id"],
-        "color_scheme": "light",
-    }
-    ctx = await browser.new_context(**ctx_opts)
+    ctx = await browser.new_context(
+        viewport=_VIEWPORT,
+        user_agent=_UA,
+        locale="en-US",
+        color_scheme="light",
+    )
     await ctx.add_init_script(_STEALTH_JS)
     return ctx
 
@@ -253,10 +226,13 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
         steps.append({"step": step_name, "file": fname, "note": info, "url": page.url})
 
     async with async_playwright() as pw:
-        launch_opts = {"headless": True}
+        launch_opts = {
+            "headless": True,
+            "args": ["--disable-blink-features=AutomationControlled"],
+        }
         if proxy_config:
             launch_opts["proxy"] = proxy_config
-        browser = await pw.firefox.launch(**launch_opts)
+        browser = await pw.chromium.launch(**launch_opts)
         ctx = await _create_stealth_context(browser, proxy_config)
         page = await ctx.new_page()
         await _apply_stealth(page)
@@ -470,7 +446,10 @@ async def run_task(task_id: int):
         comments_failed = task["comments_failed"]
 
         try:
-            browser = await pw.firefox.launch(headless=True)
+            browser = await pw.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
             probe_ctx = await _create_stealth_context(browser)
             probe_page = await probe_ctx.new_page()
             await _apply_stealth(probe_page)
@@ -499,12 +478,15 @@ async def run_task(task_id: int):
                     return
 
                 proxy_config = parse_proxy(account.get("proxy", ""))
-                launch_opts = {"headless": True}
+                launch_opts = {
+                    "headless": True,
+                    "args": ["--disable-blink-features=AutomationControlled"],
+                }
                 if proxy_config:
                     launch_opts["proxy"] = proxy_config
                     logger.info(f"Используется прокси: {proxy_config['server']} для {account['username']}")
 
-                browser = await pw.firefox.launch(**launch_opts)
+                browser = await pw.chromium.launch(**launch_opts)
                 ctx = await _create_stealth_context(browser, proxy_config)
                 page = await ctx.new_page()
                 await _apply_stealth(page)
