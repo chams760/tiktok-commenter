@@ -186,6 +186,53 @@ async def api_test_login(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+async def api_import_cookies(request):
+    try:
+        import json as _json
+        from tiktok_worker import SESSIONS_DIR
+        data = await request.json()
+        username = data.get("username", "").strip()
+        cookies_raw = data.get("cookies", "")
+        if not username:
+            return web.json_response({"error": "username required"}, status=400)
+        if not cookies_raw:
+            return web.json_response({"error": "cookies required"}, status=400)
+
+        if isinstance(cookies_raw, str):
+            cookies = _json.loads(cookies_raw)
+        else:
+            cookies = cookies_raw
+
+        if isinstance(cookies, dict):
+            cookies = [cookies]
+
+        pw_cookies = []
+        for c in cookies:
+            pc = {
+                "name": c.get("name", ""),
+                "value": c.get("value", ""),
+                "domain": c.get("domain", ".tiktok.com"),
+                "path": c.get("path", "/"),
+            }
+            if c.get("expirationDate"):
+                pc["expires"] = c["expirationDate"]
+            elif c.get("expires"):
+                pc["expires"] = c["expires"]
+            pw_cookies.append(pc)
+
+        safe = username.replace("@", "_at_").replace(".", "_")
+        path = os.path.join(SESSIONS_DIR, f"{safe}.json")
+        with open(path, "w") as f:
+            _json.dump(pw_cookies, f)
+
+        return web.json_response({"ok": True, "count": len(pw_cookies), "username": username})
+    except _json.JSONDecodeError:
+        return web.json_response({"error": "Invalid JSON in cookies"}, status=400)
+    except Exception as e:
+        logger.error(f"Import cookies error: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def api_screenshot(request):
     try:
         from tiktok_worker import take_debug_screenshot, get_all_active_tasks
@@ -247,6 +294,7 @@ async def start_health_server():
     app.router.add_post("/api/accounts", api_upload_accounts)
     app.router.add_delete("/api/accounts", api_delete_accounts)
     app.router.add_post("/api/cancel", api_cancel_task)
+    app.router.add_post("/api/import-cookies", api_import_cookies)
     port = int(os.environ.get("PORT", 8080))
     runner = web.AppRunner(app)
     await runner.setup()

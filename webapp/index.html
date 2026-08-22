@@ -393,6 +393,30 @@
 
     <div id="test-results" style="margin-top:16px;"></div>
 
+    <div class="section-label" style="margin-top:24px;">Import cookies (bypass login)</div>
+    <div class="card" style="margin-bottom:12px;">
+        <div style="font-size:13px;color:var(--text-2);margin-bottom:8px;">
+            TikTok blocks automated login. Instead: log in manually in your browser, export cookies with a browser extension
+            (Cookie-Editor, EditThisCookie), and paste them here.
+        </div>
+        <div style="font-size:12px;color:var(--text-3);margin-bottom:12px;">
+            1. Install "Cookie-Editor" extension in Chrome/Firefox<br>
+            2. Go to tiktok.com, log in to your account<br>
+            3. Click Cookie-Editor icon, click "Export" (JSON)<br>
+            4. Paste below with the account username
+        </div>
+        <div class="field" style="margin-bottom:8px;">
+            <input type="text" id="cookie-username" placeholder="Account username / email (must match loaded account)">
+        </div>
+        <div class="field" style="margin-bottom:0;">
+            <textarea id="cookie-json" rows="4" placeholder='Paste cookies JSON here...'></textarea>
+        </div>
+    </div>
+    <button class="btn btn-primary" id="btn-import-cookies" onclick="importCookies()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Import cookies
+    </button>
+
     <div class="section-label" style="margin-top:24px;">Live screenshot</div>
     <div id="live-screen" class="screen-wrap">
         <div class="screen-placeholder">
@@ -605,6 +629,25 @@ function saveSettings() {
         delay_max: document.getElementById('delay-max').value
     }));
     toast('Settings saved', 'success');
+}
+
+async function importCookies() {
+    const username = document.getElementById('cookie-username').value.trim();
+    const cookiesRaw = document.getElementById('cookie-json').value.trim();
+    if (!username) { toast('Enter account username', 'error'); return; }
+    if (!cookiesRaw) { toast('Paste cookies JSON', 'error'); return; }
+    let cookies;
+    try { cookies = JSON.parse(cookiesRaw); } catch(e) { toast('Invalid JSON', 'error'); return; }
+    const btn = document.getElementById('btn-import-cookies');
+    btn.disabled = true;
+    const res = await api('POST', '/api/import-cookies', { username, cookies });
+    btn.disabled = false;
+    if (res.ok) {
+        toast(res.count + ' cookies imported for ' + res.username, 'success');
+        document.getElementById('cookie-json').value = '';
+    } else {
+        toast(res.error || 'Error', 'error');
+    }
 }
 
 async function takeScreenshot() {
