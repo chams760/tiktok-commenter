@@ -862,43 +862,112 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         _random_mouse_move(driver, 3)
         step("homepage", f"Homepage visited. Src: {len(driver.page_source)}b")
 
-        # Step 2: Go to login page
-        driver.get("https://www.tiktok.com/login/phone-or-email/email")
-        time.sleep(5)
-        _dismiss_cookie_banner(driver)
-        time.sleep(2)
-        _dismiss_cookie_banner(driver)
+        # Step 2: Navigate to login via UI flow (not direct URL — TikTok blocks direct)
+        # First try clicking Log in on homepage
+        login_clicked = False
+        try:
+            login_link = driver.execute_script("""
+                var els = document.querySelectorAll('a, button, div[role="button"]');
+                for (var i = 0; i < els.length; i++) {
+                    var t = (els[i].innerText || '').trim().toLowerCase();
+                    if ((t === 'log in' || t === 'login' || t === 'войти' || t === 'sign in') && els[i].offsetHeight > 0) {
+                        els[i].click();
+                        return 'clicked:' + t;
+                    }
+                }
+                // Try header login button
+                var headerBtns = document.querySelectorAll('[data-e2e="top-login-button"], [class*="login"] button, header button');
+                for (var j = 0; j < headerBtns.length; j++) {
+                    if (headerBtns[j].offsetHeight > 0) {
+                        headerBtns[j].click();
+                        return 'clicked_header:' + (headerBtns[j].innerText || '').trim();
+                    }
+                }
+                return 'not_found';
+            """)
+            step("login_click", f"Homepage login: {login_link}")
+            if login_link and login_link.startswith("clicked"):
+                login_clicked = True
+                time.sleep(4)
+                _dismiss_cookie_banner(driver)
+        except Exception as e:
+            step("login_click_fail", str(e))
 
-        # Check if page rendered (SPA might need time)
+        if not login_clicked:
+            driver.get("https://www.tiktok.com/login")
+            time.sleep(5)
+            _dismiss_cookie_banner(driver)
+
+        snap(driver, "login_modal")
+        step("login_modal", f"Login modal/page. URL: {driver.current_url} | Src: {len(driver.page_source)}b")
+
+        # Now find and click "Email / Username" or "Phone or email" option
+        time.sleep(2)
+        email_option_clicked = False
+        try:
+            result = driver.execute_script("""
+                var links = document.querySelectorAll('a, div[role="link"], div[role="button"], button, p, span');
+                for (var i = 0; i < links.length; i++) {
+                    var el = links[i];
+                    if (el.offsetHeight === 0) continue;
+                    var t = (el.innerText || el.textContent || '').trim().toLowerCase();
+                    if (t.match(/email.*username|phone.*email|use.*email|email.*phone|email/i) && t.length < 60) {
+                        el.click();
+                        return 'clicked:' + t;
+                    }
+                }
+                // Try specific TikTok selectors
+                var specific = document.querySelectorAll('[data-e2e="channel-item"], [class*="channel"] a, [class*="login-option"]');
+                for (var j = 0; j < specific.length; j++) {
+                    var sel = specific[j];
+                    if (sel.offsetHeight === 0) continue;
+                    var st = (sel.innerText || '').toLowerCase();
+                    if (st.includes('email') || st.includes('phone')) {
+                        sel.click();
+                        return 'clicked_specific:' + st.substring(0, 50);
+                    }
+                }
+                return 'not_found';
+            """)
+            step("email_option", f"Email option: {result}")
+            if result and result.startswith("clicked"):
+                email_option_clicked = True
+                time.sleep(3)
+                _dismiss_cookie_banner(driver)
+        except Exception as e:
+            step("email_option_fail", str(e))
+
+        # If UI click failed, try direct URL as fallback
+        if not email_option_clicked:
+            step("fallback_direct", "UI click failed, trying direct URL as fallback")
+            driver.get("https://www.tiktok.com/login/phone-or-email/email")
+            time.sleep(5)
+            _dismiss_cookie_banner(driver)
+
+        # Now click "Log in with email" tab if on phone-or-email page
+        time.sleep(1)
+        try:
+            driver.execute_script("""
+                var tabs = document.querySelectorAll('a, div[role="tab"], [class*="tab"], span');
+                for (var i = 0; i < tabs.length; i++) {
+                    var t = (tabs[i].innerText || '').trim().toLowerCase();
+                    if (t === 'email' || t.match(/log.*in.*with.*email|email.*log/i)) {
+                        if (tabs[i].offsetHeight > 0) { tabs[i].click(); break; }
+                    }
+                }
+            """)
+        except Exception:
+            pass
+        time.sleep(2)
+
+        snap(driver, "login_page")
         page_src_len = len(driver.page_source or "")
         body_text = ""
         try:
             body_text = driver.find_element(By.TAG_NAME, "body").text
         except Exception:
             pass
-
-        if not body_text.strip() and page_src_len < 5000:
-            step("empty_page", f"Page empty (src={page_src_len}b), waiting 10s for SPA render...")
-            time.sleep(10)
-            try:
-                body_text = driver.find_element(By.TAG_NAME, "body").text
-            except Exception:
-                pass
-            page_src_len = len(driver.page_source or "")
-
-        if not body_text.strip() and page_src_len < 5000:
-            step("still_empty", f"Still empty after wait. Reloading page...")
-            driver.refresh()
-            time.sleep(8)
-            _dismiss_cookie_banner(driver)
-            try:
-                body_text = driver.find_element(By.TAG_NAME, "body").text
-            except Exception:
-                pass
-            page_src_len = len(driver.page_source or "")
-
-        snap(driver, "login_page")
-        step("login_page", f"Login page | body_len={len(body_text)} | src_len={page_src_len}")
+        step("login_page", f"Login page | body_len={len(body_text)} | src_len={page_src_len} | URL: {driver.current_url}")
 
         # Save page source for debugging
         try:
