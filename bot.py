@@ -70,11 +70,99 @@ async def webapp_handler(request):
     return web.Response(text="WebApp not found", status=404)
 
 
+_bot_ref = None
+_task_runner = None
+
+
+async def api_stats(request):
+    try:
+        import database as db
+        stats = await db.get_stats()
+        accounts = await db.get_accounts()
+        tasks = await db.get_all_tasks(limit=10)
+        return web.json_response({
+            "stats": stats,
+            "accounts": [{"id": a["id"], "username": a["username"], "status": a["status"], "comments_today": a["comments_today"]} for a in accounts],
+            "tasks": tasks,
+        })
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def api_create_task(request):
+    try:
+        import database as db
+        from tiktok_worker import run_task
+        data = await request.json()
+        query = data.get("query", "").strip()
+        comment = data.get("comment", "").strip()
+        limit = int(data.get("limit", 100))
+        if not query or not comment:
+            return web.json_response({"error": "query and comment required"}, status=400)
+        accounts = await db.get_accounts()
+        if not accounts:
+            return web.json_response({"error": "no accounts loaded"}, status=400)
+        task_id = await db.create_task(query, comment, limit)
+        asyncio.create_task(run_task(task_id))
+        if _bot_ref:
+            import config
+            for admin_id in config.ADMIN_IDS:
+                try:
+                    await _bot_ref.send_message(admin_id, f"Задача #{task_id} создана через WebApp\n\nЗапрос: {query}\nКомментарий: {comment}\nЛимит: {limit}")
+                except Exception:
+                    pass
+        return web.json_response({"ok": True, "task_id": task_id})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def api_upload_accounts(request):
+    try:
+        import database as db
+        data = await request.json()
+        raw = data.get("accounts", "")
+        lines = [l.strip() for l in raw.splitlines() if ":" in l]
+        accounts = [(l.split(":", 1)[0].strip(), l.split(":", 1)[1].strip()) for l in lines]
+        if not accounts:
+            return web.json_response({"error": "no valid accounts"}, status=400)
+        await db.add_accounts(accounts)
+        return web.json_response({"ok": True, "count": len(accounts)})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def api_delete_accounts(request):
+    try:
+        import database as db
+        await db.delete_all_accounts()
+        return web.json_response({"ok": True})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def api_cancel_task(request):
+    try:
+        import database as db
+        data = await request.json()
+        task_id = int(data.get("task_id", 0))
+        if not task_id:
+            return web.json_response({"error": "task_id required"}, status=400)
+        await db.update_task(task_id, status="cancelled")
+        return web.json_response({"ok": True})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def start_health_server():
     app = web.Application()
     app.router.add_get("/", dashboard_handler)
     app.router.add_get("/health", health_handler)
     app.router.add_get("/webapp", webapp_handler)
+    app.router.add_get("/api/stats", api_stats)
+    app.router.add_post("/api/task", api_create_task)
+    app.router.add_post("/api/accounts", api_upload_accounts)
+    app.router.add_delete("/api/accounts", api_delete_accounts)
+    app.router.add_post("/api/cancel", api_cancel_task)
     port = int(os.environ.get("PORT", 8080))
     runner = web.AppRunner(app)
     await runner.setup()
@@ -92,6 +180,7 @@ async def start_bot():
         logger.error("BOT_TOKEN не задан! Health-сервер работает, бот — нет.")
         return
 
+    global _bot_ref
     from aiogram import Bot, Dispatcher, F, types
     from aiogram.filters import Command
     from aiogram.types import (
@@ -103,6 +192,7 @@ async def start_bot():
     from tiktok_worker import run_task, take_debug_screenshot, get_all_active_tasks
 
     bot = Bot(token=config.BOT_TOKEN)
+    _bot_ref = bot
     dp = Dispatcher()
 
     def is_admin(user_id: int) -> bool:

@@ -19,19 +19,15 @@
             --text-3: #5C5C66;
             --accent: #E84D3A;
             --accent-dim: rgba(232, 77, 58, 0.12);
-            --accent-hover: #D44330;
             --green: #2DB86A;
             --green-dim: rgba(45, 184, 106, 0.12);
-            --red: #E84D3A;
-            --red-dim: rgba(232, 77, 58, 0.12);
+            --yellow: #E8A73A;
+            --yellow-dim: rgba(232, 167, 58, 0.12);
             --radius: 10px;
-            --radius-sm: 6px;
         }
-
         * { box-sizing: border-box; margin: 0; padding: 0; }
-
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            font-family: 'Inter', -apple-system, sans-serif;
             background: var(--bg);
             color: var(--text);
             line-height: 1.5;
@@ -40,576 +36,506 @@
             -webkit-font-smoothing: antialiased;
         }
 
-        /* ── Header ── */
-        .header {
-            padding: 20px 20px 0;
-        }
+        .header { padding: 20px 20px 0; }
+        .header-title { font-size: 22px; font-weight: 700; letter-spacing: -0.3px; }
+        .header-sub { font-size: 13px; color: var(--text-3); margin-top: 2px; }
 
-        .header-title {
-            font-size: 22px;
-            font-weight: 700;
-            letter-spacing: -0.3px;
-        }
-
-        .header-sub {
-            font-size: 13px;
-            color: var(--text-3);
-            margin-top: 2px;
-        }
-
-        /* ── Panels ── */
-        .panel {
-            display: none;
-            padding: 16px 20px;
-            animation: fadeIn 0.2s ease;
-        }
-
+        .panel { display: none; padding: 16px 20px; animation: fadeIn .2s ease; }
         .panel.active { display: block; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(6px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        /* ── Section titles ── */
         .section-label {
-            font-size: 11px;
-            font-weight: 600;
-            letter-spacing: 0.8px;
-            text-transform: uppercase;
-            color: var(--text-3);
-            margin-bottom: 10px;
-            margin-top: 20px;
+            font-size: 11px; font-weight: 600; letter-spacing: 0.8px;
+            text-transform: uppercase; color: var(--text-3);
+            margin-bottom: 10px; margin-top: 20px;
         }
-
         .section-label:first-child { margin-top: 0; }
 
-        /* ── Cards ── */
         .card {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 16px;
-            margin-bottom: 10px;
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 16px; margin-bottom: 10px;
         }
 
-        /* ── Form elements ── */
+        /* Stats grid */
+        .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+        .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+        .stat-val { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .stat-label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
+        .stat-accent .stat-val { color: var(--accent); }
+        .stat-green .stat-val { color: var(--green); }
+
+        /* Form */
         .field { margin-bottom: 16px; }
-
         .field-label {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 13px;
-            font-weight: 500;
-            color: var(--text-2);
-            margin-bottom: 8px;
+            display: flex; align-items: center; gap: 6px;
+            font-size: 13px; font-weight: 500; color: var(--text-2); margin-bottom: 8px;
         }
+        .field-label svg { width: 14px; height: 14px; opacity: 0.5; }
 
-        .field-label svg {
-            width: 14px;
-            height: 14px;
-            opacity: 0.5;
+        input[type="text"], input[type="number"], textarea {
+            width: 100%; padding: 12px 14px;
+            border: 1px solid var(--border); border-radius: var(--radius);
+            background: var(--surface-2); color: var(--text);
+            font-family: inherit; font-size: 14px; outline: none;
+            transition: border-color .15s, background .15s;
         }
+        input:focus, textarea:focus { border-color: var(--accent); background: var(--surface-3); }
+        input::placeholder, textarea::placeholder { color: var(--text-3); }
+        textarea { min-height: 88px; resize: vertical; line-height: 1.5; }
 
-        input[type="text"],
-        input[type="number"],
-        textarea {
-            width: 100%;
-            padding: 12px 14px;
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            background: var(--surface-2);
-            color: var(--text);
-            font-family: inherit;
-            font-size: 14px;
-            outline: none;
-            transition: border-color 0.15s, background 0.15s;
-        }
-
-        input[type="text"]:focus,
-        input[type="number"]:focus,
-        textarea:focus {
-            border-color: var(--accent);
-            background: var(--surface-3);
-        }
-
-        input::placeholder,
-        textarea::placeholder {
-            color: var(--text-3);
-        }
-
-        textarea {
-            min-height: 88px;
-            resize: vertical;
-            line-height: 1.5;
-        }
-
-        /* ── Range slider ── */
-        .range-row {
-            display: flex;
-            align-items: center;
-            gap: 14px;
-        }
-
+        .range-row { display: flex; align-items: center; gap: 14px; }
         .range-row input[type="range"] {
-            flex: 1;
-            -webkit-appearance: none;
-            appearance: none;
-            height: 4px;
-            background: var(--surface-3);
-            border-radius: 2px;
-            outline: none;
+            flex: 1; -webkit-appearance: none; appearance: none;
+            height: 4px; background: var(--surface-3); border-radius: 2px; outline: none;
         }
-
         .range-row input[type="range"]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            width: 18px;
-            height: 18px;
-            background: var(--accent);
-            border-radius: 50%;
-            cursor: pointer;
-            border: 2px solid var(--bg);
-            box-shadow: 0 0 0 1px var(--accent);
+            -webkit-appearance: none; width: 18px; height: 18px;
+            background: var(--accent); border-radius: 50%; cursor: pointer;
+            border: 2px solid var(--bg); box-shadow: 0 0 0 1px var(--accent);
         }
-
         .range-val {
-            font-size: 15px;
-            font-weight: 600;
-            font-variant-numeric: tabular-nums;
-            min-width: 36px;
-            text-align: right;
-            color: var(--text);
+            font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums;
+            min-width: 36px; text-align: right;
         }
 
-        /* ── Buttons ── */
+        /* Buttons */
         .btn {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            width: 100%;
-            padding: 14px 20px;
-            border: none;
-            border-radius: var(--radius);
-            font-family: inherit;
-            font-size: 15px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: background 0.15s, transform 0.1s;
+            display: flex; align-items: center; justify-content: center; gap: 8px;
+            width: 100%; padding: 14px 20px; border: none; border-radius: var(--radius);
+            font-family: inherit; font-size: 15px; font-weight: 600; cursor: pointer;
+            transition: background .15s, transform .1s;
         }
-
         .btn:active { transform: scale(0.98); }
         .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
-
         .btn svg { width: 18px; height: 18px; }
-
-        .btn-primary {
-            background: var(--accent);
-            color: #fff;
-        }
-
-        .btn-primary:hover { background: var(--accent-hover); }
-
-        .btn-secondary {
-            background: var(--surface-2);
-            color: var(--text);
-            border: 1px solid var(--border);
-        }
-
-        .btn-danger {
-            background: var(--red-dim);
-            color: var(--red);
-            border: 1px solid transparent;
-        }
-
+        .btn-primary { background: var(--accent); color: #fff; }
+        .btn-secondary { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
+        .btn-danger { background: var(--accent-dim); color: var(--accent); }
         .btn + .btn { margin-top: 8px; }
 
-        /* ── File upload ── */
+        /* File drop */
         .file-drop {
-            border: 1px dashed var(--border);
-            border-radius: var(--radius);
-            padding: 24px;
-            text-align: center;
-            cursor: pointer;
-            transition: border-color 0.15s, background 0.15s;
+            border: 1px dashed var(--border); border-radius: var(--radius);
+            padding: 24px; text-align: center; cursor: pointer; transition: border-color .15s;
         }
+        .file-drop:hover { border-color: var(--text-3); background: var(--surface); }
+        .file-drop svg { width: 28px; height: 28px; color: var(--text-3); margin-bottom: 8px; }
+        .file-drop-text { font-size: 13px; color: var(--text-3); }
+        .file-drop-text strong { color: var(--accent); font-weight: 500; }
+        .file-drop input[type="file"] { display: none; }
 
-        .file-drop:hover {
-            border-color: var(--text-3);
-            background: var(--surface);
+        .sep { display: flex; align-items: center; gap: 12px; margin: 16px 0; }
+        .sep::before, .sep::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+        .sep span { font-size: 12px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.5px; }
+
+        /* Accounts list */
+        .acc-item {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 10px 0; border-bottom: 1px solid var(--border);
         }
-
-        .file-drop svg {
-            width: 28px;
-            height: 28px;
-            color: var(--text-3);
-            margin-bottom: 8px;
+        .acc-item:last-child { border-bottom: none; }
+        .acc-name { font-size: 13px; font-weight: 500; }
+        .acc-meta { font-size: 11px; color: var(--text-3); }
+        .badge {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;
         }
+        .badge-ok { background: var(--green-dim); color: var(--green); }
+        .badge-err { background: var(--accent-dim); color: var(--accent); }
+        .badge-warn { background: var(--yellow-dim); color: var(--yellow); }
 
-        .file-drop-text {
-            font-size: 13px;
-            color: var(--text-3);
+        /* Tasks list */
+        .task-item {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 14px; margin-bottom: 8px;
         }
-
-        .file-drop-text strong {
-            color: var(--accent);
-            font-weight: 500;
+        .task-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+        .task-id { font-size: 12px; color: var(--text-3); font-weight: 600; }
+        .task-query { font-size: 14px; font-weight: 500; margin-bottom: 4px; }
+        .task-progress { display: flex; gap: 12px; font-size: 12px; color: var(--text-2); }
+        .task-bar { height: 3px; background: var(--surface-3); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+        .task-bar-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width .3s; }
+        .task-cancel {
+            background: none; border: none; color: var(--text-3); cursor: pointer;
+            padding: 4px; display: flex; align-items: center;
         }
+        .task-cancel:hover { color: var(--accent); }
+        .task-cancel svg { width: 16px; height: 16px; }
 
-        .file-drop input[type="file"] {
-            display: none;
-        }
-
-        /* ── Separator ── */
-        .sep {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin: 16px 0;
-        }
-
-        .sep::before, .sep::after {
-            content: '';
-            flex: 1;
-            height: 1px;
-            background: var(--border);
-        }
-
-        .sep span {
-            font-size: 12px;
-            color: var(--text-3);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        /* ── Settings rows ── */
-        .setting-item {
-            padding: 14px 0;
-            border-bottom: 1px solid var(--border);
-        }
-
+        /* Settings */
+        .setting-item { padding: 14px 0; border-bottom: 1px solid var(--border); }
         .setting-item:last-child { border-bottom: none; }
+        .setting-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+        .setting-header svg { width: 16px; height: 16px; color: var(--text-3); }
+        .setting-title { font-size: 14px; font-weight: 500; }
+        .delay-row { display: flex; gap: 10px; }
+        .delay-field { flex: 1; }
+        .delay-field input { text-align: center; }
+        .delay-label { text-align: center; font-size: 11px; color: var(--text-3); margin-top: 4px; }
 
-        .setting-header {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 10px;
-        }
+        /* Empty state */
+        .empty { text-align: center; padding: 32px 16px; color: var(--text-3); font-size: 13px; }
+        .empty svg { width: 36px; height: 36px; margin-bottom: 10px; opacity: 0.3; }
 
-        .setting-header svg {
-            width: 16px;
-            height: 16px;
-            color: var(--text-3);
-        }
-
-        .setting-title {
-            font-size: 14px;
-            font-weight: 500;
-        }
-
-        .delay-row {
-            display: flex;
-            gap: 10px;
-        }
-
-        .delay-field {
-            flex: 1;
-        }
-
-        .delay-field input {
-            text-align: center;
-        }
-
-        .delay-label {
-            text-align: center;
-            font-size: 11px;
-            color: var(--text-3);
-            margin-top: 4px;
-        }
-
-        /* ── Bottom tab bar ── */
+        /* Tab bar */
         .tabbar {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            display: flex;
-            background: var(--surface);
+            position: fixed; bottom: 0; left: 0; right: 0;
+            display: flex; background: var(--surface);
             border-top: 1px solid var(--border);
-            padding: 6px 0 env(safe-area-inset-bottom, 8px);
-            z-index: 100;
+            padding: 6px 0 env(safe-area-inset-bottom, 8px); z-index: 100;
         }
-
         .tabbar-item {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 3px;
-            padding: 8px 4px;
-            border: none;
-            background: none;
-            cursor: pointer;
-            transition: color 0.15s;
-            color: var(--text-3);
-            -webkit-tap-highlight-color: transparent;
+            flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+            padding: 8px 4px; border: none; background: none; cursor: pointer;
+            color: var(--text-3); -webkit-tap-highlight-color: transparent; transition: color .15s;
         }
-
         .tabbar-item.active { color: var(--accent); }
+        .tabbar-item svg { width: 22px; height: 22px; }
+        .tabbar-label { font-family: inherit; font-size: 10px; font-weight: 500; letter-spacing: 0.2px; }
 
-        .tabbar-item svg {
-            width: 22px;
-            height: 22px;
-        }
-
-        .tabbar-label {
-            font-family: inherit;
-            font-size: 10px;
-            font-weight: 500;
-            letter-spacing: 0.2px;
-        }
-
-        /* ── Toast ── */
+        /* Toast */
         .toast {
-            position: fixed;
-            top: 16px;
-            left: 20px;
-            right: 20px;
-            padding: 14px 16px;
-            background: var(--surface-2);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            font-size: 13px;
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            z-index: 200;
-            transform: translateY(-100px);
-            opacity: 0;
-            transition: transform 0.25s ease, opacity 0.25s ease;
+            position: fixed; top: 16px; left: 20px; right: 20px;
+            padding: 14px 16px; background: var(--surface-2); border: 1px solid var(--border);
+            border-radius: var(--radius); font-size: 13px; font-weight: 500;
+            display: flex; align-items: center; gap: 10px; z-index: 200;
+            transform: translateY(-100px); opacity: 0; transition: transform .25s ease, opacity .25s ease;
         }
-
-        .toast.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
-
+        .toast.show { transform: translateY(0); opacity: 1; }
         .toast.success { border-color: var(--green); color: var(--green); }
-        .toast.error { border-color: var(--red); color: var(--red); }
-
+        .toast.error { border-color: var(--accent); color: var(--accent); }
         .toast svg { width: 18px; height: 18px; flex-shrink: 0; }
+
+        /* Spinner */
+        .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--text-3); border-top-color: var(--accent); border-radius: 50%; animation: spin .6s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
 
-    <div id="toast" class="toast"></div>
+<div id="toast" class="toast"></div>
 
-    <div class="header">
-        <div class="header-title">TikTok Commenter</div>
-        <div class="header-sub">Automation panel</div>
+<div class="header">
+    <div class="header-title">TikTok Commenter</div>
+    <div class="header-sub">Automation panel</div>
+</div>
+
+<!-- ── Dashboard ── -->
+<div id="panel-dashboard" class="panel active">
+    <div class="stats-grid">
+        <div class="stat-card stat-accent">
+            <div class="stat-val" id="st-sent">-</div>
+            <div class="stat-label">Sent</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-val" id="st-errors">-</div>
+            <div class="stat-label">Errors</div>
+        </div>
+        <div class="stat-card stat-green">
+            <div class="stat-val" id="st-accounts">-</div>
+            <div class="stat-label">Accounts</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-val" id="st-tasks">-</div>
+            <div class="stat-label">Active tasks</div>
+        </div>
     </div>
 
-    <!-- ── Task panel ── -->
-    <div id="panel-task" class="panel active">
+    <div class="section-label">Active tasks</div>
+    <div id="tasks-list"></div>
+</div>
 
-        <div class="section-label">Новая задача</div>
-
-        <div class="field">
-            <div class="field-label">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-                Поисковый запрос
-            </div>
-            <input type="text" id="query" placeholder="Какие видео искать...">
+<!-- ── New task ── -->
+<div id="panel-task" class="panel">
+    <div class="section-label">New task</div>
+    <div class="field">
+        <div class="field-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            Search query
         </div>
-
-        <div class="field">
-            <div class="field-label">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                Текст комментария
-            </div>
-            <textarea id="comment" placeholder="Что написать под видео..."></textarea>
+        <input type="text" id="query" placeholder="What videos to find...">
+    </div>
+    <div class="field">
+        <div class="field-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Comment text
         </div>
+        <textarea id="comment" placeholder="What to post under videos..."></textarea>
+    </div>
+    <div class="field">
+        <div class="field-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+            Comment limit
+        </div>
+        <div class="range-row">
+            <input type="range" id="limit" min="1" max="500" value="50" oninput="document.getElementById('limit-val').textContent=this.value">
+            <span class="range-val" id="limit-val">50</span>
+        </div>
+    </div>
+    <button class="btn btn-primary" id="btn-create" onclick="createTask()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        Launch
+    </button>
+</div>
 
-        <div class="field">
-            <div class="field-label">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
-                Лимит комментариев
+<!-- ── Accounts ── -->
+<div id="panel-accounts" class="panel">
+    <div class="section-label">Current accounts</div>
+    <div id="accounts-list" class="card" style="display:none;"></div>
+    <div id="accounts-empty" class="empty" style="display:none;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+        <div>No accounts loaded</div>
+    </div>
+
+    <div class="section-label">Upload accounts</div>
+    <div class="field">
+        <textarea id="accounts-input" rows="5" placeholder="login:password&#10;login2:password2"></textarea>
+    </div>
+    <button class="btn btn-primary" id="btn-upload" onclick="uploadAccounts()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Upload
+    </button>
+
+    <div class="sep"><span>or from file</span></div>
+
+    <div class="file-drop" onclick="document.getElementById('file-input').click()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <div class="file-drop-text">Select <strong>.txt</strong> file</div>
+        <input type="file" id="file-input" accept=".txt" onchange="loadFile(event)">
+    </div>
+
+    <button class="btn btn-danger" style="margin-top:16px;" onclick="deleteAccounts()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        Delete all accounts
+    </button>
+</div>
+
+<!-- ── Settings ── -->
+<div id="panel-settings" class="panel">
+    <div class="section-label">Limits</div>
+    <div class="card">
+        <div class="setting-item">
+            <div class="setting-header">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <span class="setting-title">Comments per account / day</span>
             </div>
             <div class="range-row">
-                <input type="range" id="limit" min="1" max="500" value="50" oninput="document.getElementById('limit-val').textContent=this.value">
-                <span class="range-val" id="limit-val">50</span>
+                <input type="range" id="max-per-day" min="5" max="200" value="50" oninput="document.getElementById('mpd-val').textContent=this.value">
+                <span class="range-val" id="mpd-val">50</span>
             </div>
         </div>
-
-        <button class="btn btn-primary" onclick="createTask()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-            Запустить
-        </button>
-
+        <div class="setting-item">
+            <div class="setting-header">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                <span class="setting-title">Delay between comments</span>
+            </div>
+            <div class="delay-row">
+                <div class="delay-field">
+                    <input type="number" id="delay-min" value="30" min="5">
+                    <div class="delay-label">min sec</div>
+                </div>
+                <div class="delay-field">
+                    <input type="number" id="delay-max" value="90" min="10">
+                    <div class="delay-label">max sec</div>
+                </div>
+            </div>
+        </div>
     </div>
+    <button class="btn btn-primary" onclick="saveSettings()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+        Save
+    </button>
+</div>
 
-    <!-- ── Accounts panel ── -->
-    <div id="panel-accounts" class="panel">
+<!-- ── Tab bar ── -->
+<nav class="tabbar">
+    <button class="tabbar-item active" onclick="showTab('dashboard',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        <span class="tabbar-label">Dashboard</span>
+    </button>
+    <button class="tabbar-item" onclick="showTab('task',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        <span class="tabbar-label">New task</span>
+    </button>
+    <button class="tabbar-item" onclick="showTab('accounts',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span class="tabbar-label">Accounts</span>
+    </button>
+    <button class="tabbar-item" onclick="showTab('settings',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span class="tabbar-label">Settings</span>
+    </button>
+</nav>
 
-        <div class="section-label">Загрузка аккаунтов</div>
+<script>
+const tg = window.Telegram.WebApp;
+tg.ready();
+tg.expand();
+try { tg.setHeaderColor('#0C0C0E'); tg.setBackgroundColor('#0C0C0E'); } catch(e) {}
 
-        <div class="field">
-            <div class="field-label">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                Вставьте аккаунты
-            </div>
-            <textarea id="accounts-input" rows="6" placeholder="login:password&#10;login2:password2&#10;login3:password3"></textarea>
-        </div>
+const API = window.location.origin;
 
-        <button class="btn btn-primary" onclick="uploadAccounts()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-            Загрузить
-        </button>
+function showTab(name, el) {
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tabbar-item').forEach(t => t.classList.remove('active'));
+    document.getElementById('panel-' + name).classList.add('active');
+    if (el) el.classList.add('active');
+    if (name === 'dashboard') loadStats();
+}
 
-        <div class="sep"><span>или из файла</span></div>
+function toast(text, type) {
+    const t = document.getElementById('toast');
+    const icon = type === 'success'
+        ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
+        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
+    t.className = 'toast ' + type;
+    t.innerHTML = icon + '<span>' + text + '</span>';
+    requestAnimationFrame(() => t.classList.add('show'));
+    setTimeout(() => t.classList.remove('show'), 2500);
+}
 
-        <div class="file-drop" onclick="document.getElementById('file-input').click()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-            <div class="file-drop-text">Нажмите, чтобы выбрать <strong>.txt</strong> файл</div>
-            <input type="file" id="file-input" accept=".txt" onchange="loadFile(event)">
-        </div>
+async function api(method, path, body) {
+    try {
+        const opts = { method, headers: { 'Content-Type': 'application/json' } };
+        if (body) opts.body = JSON.stringify(body);
+        const res = await fetch(API + path, opts);
+        return await res.json();
+    } catch (e) {
+        toast('Connection error', 'error');
+        return { error: e.message };
+    }
+}
 
-    </div>
+async function loadStats() {
+    const data = await api('GET', '/api/stats');
+    if (data.error) return;
 
-    <!-- ── Settings panel ── -->
-    <div id="panel-settings" class="panel">
+    const s = data.stats;
+    document.getElementById('st-sent').textContent = s.comments_sent;
+    document.getElementById('st-errors').textContent = s.comments_errors;
+    document.getElementById('st-accounts').textContent = s.accounts_active;
+    document.getElementById('st-tasks').textContent = s.active_tasks;
 
-        <div class="section-label">Лимиты</div>
+    renderAccounts(data.accounts || []);
+    renderTasks(data.tasks || []);
+}
 
-        <div class="card">
-            <div class="setting-item">
-                <div class="setting-header">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                    <span class="setting-title">Комментариев с аккаунта в сутки</span>
-                </div>
-                <div class="range-row">
-                    <input type="range" id="max-per-day" min="5" max="200" value="50" oninput="document.getElementById('mpd-val').textContent=this.value">
-                    <span class="range-val" id="mpd-val">50</span>
-                </div>
-            </div>
+function renderAccounts(accounts) {
+    const list = document.getElementById('accounts-list');
+    const empty = document.getElementById('accounts-empty');
+    if (!accounts.length) {
+        list.style.display = 'none';
+        empty.style.display = 'block';
+        return;
+    }
+    empty.style.display = 'none';
+    list.style.display = 'block';
+    list.innerHTML = accounts.map(a => {
+        const cls = a.status === 'active' ? 'badge-ok' : 'badge-err';
+        return `<div class="acc-item">
+            <div><div class="acc-name">${esc(a.username)}</div><div class="acc-meta">${a.comments_today} comments today</div></div>
+            <span class="badge ${cls}">${a.status}</span>
+        </div>`;
+    }).join('');
+}
 
-            <div class="setting-item">
-                <div class="setting-header">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
-                    <span class="setting-title">Задержка между комментариями</span>
-                </div>
-                <div class="delay-row">
-                    <div class="delay-field">
-                        <input type="number" id="delay-min" value="30" min="5">
-                        <div class="delay-label">мин. сек</div>
-                    </div>
-                    <div class="delay-field">
-                        <input type="number" id="delay-max" value="90" min="10">
-                        <div class="delay-label">макс. сек</div>
-                    </div>
-                </div>
-            </div>
-        </div>
+function renderTasks(tasks) {
+    const el = document.getElementById('tasks-list');
+    const active = tasks.filter(t => t.status === 'running' || t.status === 'pending');
+    if (!active.length && !tasks.length) {
+        el.innerHTML = '<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><div>No tasks yet</div></div>';
+        return;
+    }
+    const show = tasks.slice(0, 10);
+    el.innerHTML = show.map(t => {
+        const pct = t.max_comments > 0 ? Math.round(t.comments_done / t.max_comments * 100) : 0;
+        const statusMap = { pending: ['Pending', 'badge-warn'], running: ['Running', 'badge-ok'], done: ['Done', ''], cancelled: ['Cancelled', 'badge-err'], paused_no_accounts: ['No accounts', 'badge-warn'] };
+        const [label, cls] = statusMap[t.status] || [t.status, ''];
+        const cancelBtn = (t.status === 'running' || t.status === 'pending')
+            ? `<button class="task-cancel" onclick="cancelTask(${t.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`
+            : '';
+        return `<div class="task-item">
+            <div class="task-head"><span class="task-id">#${t.id}</span><div style="display:flex;align-items:center;gap:8px;"><span class="badge ${cls}">${label}</span>${cancelBtn}</div></div>
+            <div class="task-query">${esc(t.search_query)}</div>
+            <div class="task-progress"><span>${t.comments_done}/${t.max_comments} sent</span><span>${t.comments_failed} errors</span></div>
+            <div class="task-bar"><div class="task-bar-fill" style="width:${pct}%"></div></div>
+        </div>`;
+    }).join('');
+}
 
-        <button class="btn btn-primary" onclick="saveSettings()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-            Сохранить
-        </button>
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
-    </div>
+async function createTask() {
+    const query = document.getElementById('query').value.trim();
+    const comment = document.getElementById('comment').value.trim();
+    const limit = document.getElementById('limit').value;
+    if (!query || !comment) { toast('Fill in query and comment', 'error'); return; }
+    const btn = document.getElementById('btn-create');
+    btn.disabled = true;
+    const res = await api('POST', '/api/task', { query, comment, limit: parseInt(limit) });
+    btn.disabled = false;
+    if (res.ok) {
+        toast('Task #' + res.task_id + ' created', 'success');
+        document.getElementById('query').value = '';
+        document.getElementById('comment').value = '';
+        showTab('dashboard', document.querySelector('.tabbar-item'));
+    } else {
+        toast(res.error || 'Error', 'error');
+    }
+}
 
-    <!-- ── Tab bar ── -->
-    <nav class="tabbar">
-        <button class="tabbar-item active" onclick="showTab('task', this)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-            <span class="tabbar-label">Задача</span>
-        </button>
-        <button class="tabbar-item" onclick="showTab('accounts', this)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-            <span class="tabbar-label">Аккаунты</span>
-        </button>
-        <button class="tabbar-item" onclick="showTab('settings', this)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-            <span class="tabbar-label">Настройки</span>
-        </button>
-    </nav>
+async function uploadAccounts() {
+    const raw = document.getElementById('accounts-input').value.trim();
+    if (!raw) { toast('Paste accounts first', 'error'); return; }
+    const btn = document.getElementById('btn-upload');
+    btn.disabled = true;
+    const res = await api('POST', '/api/accounts', { accounts: raw });
+    btn.disabled = false;
+    if (res.ok) {
+        toast(res.count + ' accounts loaded', 'success');
+        document.getElementById('accounts-input').value = '';
+        loadStats();
+    } else {
+        toast(res.error || 'Error', 'error');
+    }
+}
 
-    <script>
-        const tg = window.Telegram.WebApp;
-        tg.ready();
-        tg.expand();
-        tg.setHeaderColor('#0C0C0E');
-        tg.setBackgroundColor('#0C0C0E');
+async function deleteAccounts() {
+    if (!confirm('Delete all accounts?')) return;
+    const res = await api('DELETE', '/api/accounts');
+    if (res.ok) { toast('All accounts deleted', 'success'); loadStats(); }
+    else toast(res.error || 'Error', 'error');
+}
 
-        function showTab(name, el) {
-            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-            document.querySelectorAll('.tabbar-item').forEach(t => t.classList.remove('active'));
-            document.getElementById('panel-' + name).classList.add('active');
-            if (el) el.classList.add('active');
-        }
+async function cancelTask(id) {
+    const res = await api('POST', '/api/cancel', { task_id: id });
+    if (res.ok) { toast('Task #' + id + ' cancelled', 'success'); loadStats(); }
+    else toast(res.error || 'Error', 'error');
+}
 
-        function toast(text, type) {
-            const t = document.getElementById('toast');
-            const icon = type === 'success'
-                ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
-                : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
-            t.className = 'toast ' + type;
-            t.innerHTML = icon + '<span>' + text + '</span>';
-            requestAnimationFrame(() => t.classList.add('show'));
-            setTimeout(() => t.classList.remove('show'), 2500);
-        }
+function loadFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+        document.getElementById('accounts-input').value = e.target.result;
+        toast('File loaded, press Upload', 'success');
+    };
+    reader.readAsText(file);
+}
 
-        function createTask() {
-            const query = document.getElementById('query').value.trim();
-            const comment = document.getElementById('comment').value.trim();
-            const limit = document.getElementById('limit').value;
-            if (!query || !comment) {
-                toast('Заполните запрос и комментарий', 'error');
-                return;
-            }
-            tg.sendData(JSON.stringify({
-                action: 'create_task',
-                query, comment, limit
-            }));
-            toast('Задача отправлена', 'success');
-        }
+function saveSettings() {
+    tg.sendData(JSON.stringify({
+        action: 'save_settings',
+        max_per_day: document.getElementById('max-per-day').value,
+        delay_min: document.getElementById('delay-min').value,
+        delay_max: document.getElementById('delay-max').value
+    }));
+    toast('Settings saved', 'success');
+}
 
-        function uploadAccounts() {
-            const raw = document.getElementById('accounts-input').value.trim();
-            if (!raw) {
-                toast('Вставьте аккаунты', 'error');
-                return;
-            }
-            tg.sendData(JSON.stringify({
-                action: 'upload_accounts',
-                accounts: raw
-            }));
-            toast('Аккаунты загружены', 'success');
-        }
-
-        function loadFile(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                document.getElementById('accounts-input').value = e.target.result;
-                toast('Файл загружен, нажмите "Загрузить"', 'success');
-            };
-            reader.readAsText(file);
-        }
-
-        function saveSettings() {
-            tg.sendData(JSON.stringify({
-                action: 'save_settings',
-                max_per_day: document.getElementById('max-per-day').value,
-                delay_min: document.getElementById('delay-min').value,
-                delay_max: document.getElementById('delay-max').value
-            }));
-            toast('Настройки сохранены', 'success');
-        }
-    </script>
+loadStats();
+setInterval(loadStats, 10000);
+</script>
 </body>
 </html>
