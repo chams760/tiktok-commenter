@@ -55,8 +55,7 @@ async def _human_type(page: Page, selector: str, text: str):
     await el.click()
     await _human_delay(300, 600)
     for char in text:
-        await el.press(char) if len(char) == 1 else await el.type(char)
-        await asyncio.sleep(random.uniform(0.04, 0.18))
+        await el.type(char, delay=random.randint(20, 60))
     await _human_delay(200, 500)
 
 
