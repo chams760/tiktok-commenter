@@ -39,7 +39,7 @@ RUN playwright install chromium
 
 COPY . .
 
-RUN mkdir -p logs screenshots
+RUN mkdir -p logs screenshots sessions
 
 EXPOSE 8080
 

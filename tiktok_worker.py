@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import random
 from datetime import datetime, timezone
@@ -11,6 +12,9 @@ import database as db
 
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), "screenshots")
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
+
+SESSIONS_DIR = os.path.join(os.path.dirname(__file__), "sessions")
+os.makedirs(SESSIONS_DIR, exist_ok=True)
 
 _active_pages: dict[int, Page] = {}
 
@@ -101,6 +105,59 @@ async def _create_stealth_context(browser: Browser, proxy_config: dict | None = 
     return ctx
 
 
+def _session_path(username: str) -> str:
+    safe = username.replace("@", "_at_").replace(".", "_")
+    return os.path.join(SESSIONS_DIR, f"{safe}.json")
+
+
+async def _save_cookies(ctx: BrowserContext, username: str):
+    try:
+        cookies = await ctx.cookies()
+        with open(_session_path(username), "w") as f:
+            json.dump(cookies, f)
+        logger.info(f"Cookies сохранены для {username}")
+    except Exception as e:
+        logger.warning(f"Не удалось сохранить cookies {username}: {e}")
+
+
+async def _load_cookies(ctx: BrowserContext, username: str) -> bool:
+    path = _session_path(username)
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path) as f:
+            cookies = json.load(f)
+        await ctx.add_cookies(cookies)
+        logger.info(f"Cookies загружены для {username}")
+        return True
+    except Exception as e:
+        logger.warning(f"Не удалось загрузить cookies {username}: {e}")
+        return False
+
+
+async def _check_logged_in(page: Page) -> bool:
+    try:
+        await page.goto("https://www.tiktok.com/foryou", wait_until="domcontentloaded")
+        await _human_delay(3000, 5000)
+        if "login" in page.url.lower():
+            return False
+        avatar = await page.locator('[data-e2e="profile-icon"], [class*="avatar"], [class*="Avatar"]').count()
+        return avatar > 0
+    except Exception:
+        return False
+
+
+async def _warmup(page: Page):
+    try:
+        await page.goto("https://www.tiktok.com", wait_until="domcontentloaded")
+        await _human_delay(2000, 4000)
+        for _ in range(random.randint(1, 3)):
+            await page.evaluate("window.scrollBy(0, window.innerHeight * 0.5)")
+            await _human_delay(1000, 2500)
+    except Exception:
+        pass
+
+
 def parse_proxy(proxy_str: str) -> dict | None:
     if not proxy_str or not proxy_str.strip():
         return None
@@ -184,6 +241,17 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
         await _apply_stealth(page)
 
         try:
+            has_cookies = await _load_cookies(ctx, username)
+            if has_cookies:
+                if await _check_logged_in(page):
+                    await snap(page, "cookie_login", "LOGIN SUCCESS via saved cookies")
+                    return steps
+                await snap(page, "cookies_expired", "Saved cookies expired, logging in fresh")
+
+            await _warmup(page)
+            await snap(page, "warmup", "Warmup: visited TikTok homepage")
+            await _human_delay(1000, 2000)
+
             await page.goto("https://www.tiktok.com/login/phone-or-email/email", wait_until="domcontentloaded")
             await _human_delay(3000, 5000)
             await snap(page, "login_page", "Login page loaded (stealth mode)")
@@ -224,6 +292,7 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
 
             if "login" not in page.url.lower():
                 steps[-1]["note"] = "LOGIN SUCCESS - redirected away from login page"
+                await _save_cookies(ctx, username)
             else:
                 captcha = await page.locator('[class*="captcha"], [id*="captcha"], iframe[src*="captcha"]').count()
                 error_el = await page.locator('[class*="error"], [class*="Error"]').count()
@@ -246,9 +315,18 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
     return steps
 
 
-async def login_account(page: Page, username: str, password: str) -> bool:
+async def login_account(ctx: BrowserContext, page: Page, username: str, password: str) -> bool:
     try:
-        await _apply_stealth(page)
+        has_cookies = await _load_cookies(ctx, username)
+        if has_cookies:
+            if await _check_logged_in(page):
+                logger.info(f"Вход через cookies: {username}")
+                return True
+            logger.info(f"Cookies устарели для {username}, логин заново")
+
+        await _warmup(page)
+        await _human_delay(1000, 2000)
+
         await page.goto("https://www.tiktok.com/login/phone-or-email/email", wait_until="domcontentloaded")
         await _human_delay(3000, 5000)
 
@@ -263,6 +341,7 @@ async def login_account(page: Page, username: str, password: str) -> bool:
 
         if "login" not in page.url.lower():
             logger.info(f"Вход выполнен: {username}")
+            await _save_cookies(ctx, username)
             return True
 
         logger.warning(f"Не удалось войти: {username}")
@@ -385,7 +464,7 @@ async def run_task(task_id: int):
 
                 _active_pages[task_id] = page
 
-                logged_in = await login_account(page, account["username"], account["password"])
+                logged_in = await login_account(ctx, page, account["username"], account["password"])
                 if not logged_in:
                     await db.set_account_status(account["id"], "login_failed")
                     await db.log_comment(task_id, account["id"], video_url, "error", "login_failed")
