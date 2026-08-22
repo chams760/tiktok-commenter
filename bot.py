@@ -233,6 +233,21 @@ async def api_import_cookies(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+async def api_verify_code(request):
+    try:
+        from tiktok_worker import submit_verification_code
+        data = await request.json()
+        username = data.get("username", "").strip()
+        code = data.get("code", "").strip()
+        if not username or not code:
+            return web.json_response({"error": "username and code required"}, status=400)
+        steps = await submit_verification_code(username, code)
+        return web.json_response({"ok": True, "steps": steps})
+    except Exception as e:
+        logger.error(f"Verify code error: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def api_screenshot(request):
     try:
         from tiktok_worker import take_debug_screenshot, get_all_active_tasks
@@ -295,6 +310,7 @@ async def start_health_server():
     app.router.add_delete("/api/accounts", api_delete_accounts)
     app.router.add_post("/api/cancel", api_cancel_task)
     app.router.add_post("/api/import-cookies", api_import_cookies)
+    app.router.add_post("/api/verify-code", api_verify_code)
     port = int(os.environ.get("PORT", 8080))
     runner = web.AppRunner(app)
     await runner.setup()

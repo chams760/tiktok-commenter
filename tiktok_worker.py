@@ -26,6 +26,8 @@ _active_drivers: dict[int, uc.Chrome] = {}
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
+_pending_verification: dict[str, dict] = {}
+
 
 def _session_path(username: str) -> str:
     safe = username.replace("@", "_at_").replace(".", "_")
@@ -303,29 +305,39 @@ def _test_login_sync(username: str, password: str, proxy: str = "") -> list[dict
 
         ActionChains(driver).move_to_element(login_btn).click().perform()
         _human_delay(3, 5)
+        _dismiss_cookie_banner(driver)
         snap(driver, "after_click", "After clicking login button")
 
         _human_delay(5, 8)
         snap(driver, "final_state", f"Final URL: {driver.current_url}")
 
         body_text = driver.find_element(By.TAG_NAME, "body").text
-        page_src = driver.page_source.lower()
 
-        if "login" not in driver.current_url.lower():
+        if "login" not in driver.current_url.lower() and "verify" not in body_text.lower():
             steps[-1]["note"] = "LOGIN SUCCESS - redirected away from login page"
             _save_cookies(driver, username)
         elif "verify" in body_text.lower() or "verify it" in body_text.lower():
-            note = "VERIFICATION REQUIRED - TikTok wants to confirm your identity."
-            if "email" in body_text.lower():
-                note += " Method: Email verification code."
-            if "phone" in body_text.lower():
-                note += " Method: Phone verification."
-            note += " Login credentials are CORRECT. You need to verify the account from a real browser first, then import cookies."
-            steps[-1]["note"] = note
+            snap(driver, "verify_detected", "VERIFICATION page detected, clicking Email...")
+
+            try:
+                email_opt = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((By.XPATH, '//div[contains(text(),"Email") or contains(text(),"email")]'))
+                )
+                ActionChains(driver).move_to_element(email_opt).click().perform()
+                _human_delay(2, 4)
+                snap(driver, "verify_email_clicked", "Clicked Email option, waiting for code input...")
+            except Exception:
+                snap(driver, "verify_email_not_found", "Could not find Email option")
+                return steps
+
+            _pending_verification[username] = {"driver": driver, "steps": steps, "snap": snap}
+            steps[-1]["note"] = "WAITING_FOR_CODE - Enter the verification code sent to your email"
+            return steps
         else:
             note = "LOGIN FAILED - still on login page."
             if "maximum" in body_text.lower() or "too many" in body_text.lower():
                 note += " RATE LIMITED: Too many attempts."
+            page_src = driver.page_source.lower()
             if "captcha" in page_src or "puzzle" in page_src:
                 note += " CAPTCHA detected."
             steps[-1]["note"] = note
@@ -336,13 +348,94 @@ def _test_login_sync(username: str, password: str, proxy: str = "") -> list[dict
         else:
             steps.append({"step": "exception", "file": "", "note": f"Driver failed: {str(e)}", "url": ""})
     finally:
-        if driver:
-            try:
-                driver.quit()
-            except Exception:
-                pass
+        if username not in _pending_verification:
+            if driver:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
 
     return steps
+
+
+def _submit_code_sync(username: str, code: str) -> list[dict]:
+    pending = _pending_verification.get(username)
+    if not pending:
+        return [{"step": "error", "file": "", "note": "No pending verification for this account", "url": ""}]
+
+    driver = pending["driver"]
+    steps = pending["steps"]
+    ts = int(datetime.now(timezone.utc).timestamp())
+
+    def snap(driver, step_name, note=""):
+        fname = f"verify_{ts}_{len(steps)}_{step_name}.png"
+        path = os.path.join(SCREENSHOTS_DIR, fname)
+        try:
+            driver.save_screenshot(path)
+        except Exception:
+            pass
+        steps.append({"step": step_name, "file": fname, "note": note, "url": driver.current_url})
+
+    try:
+        code_inputs = driver.find_elements(By.CSS_SELECTOR, 'input[type="text"], input[type="number"], input[type="tel"]')
+        if not code_inputs:
+            code_inputs = driver.find_elements(By.CSS_SELECTOR, 'input')
+
+        if len(code_inputs) == 1:
+            code_inputs[0].clear()
+            _human_type(code_inputs[0], code)
+        elif len(code_inputs) >= 4:
+            for i, digit in enumerate(code):
+                if i < len(code_inputs):
+                    code_inputs[i].send_keys(digit)
+                    _human_delay(0.05, 0.15)
+        else:
+            for inp in code_inputs:
+                try:
+                    inp.clear()
+                    _human_type(inp, code)
+                    break
+                except Exception:
+                    continue
+
+        snap(driver, "code_entered", f"Verification code entered: {code}")
+        _human_delay(1, 2)
+
+        try:
+            verify_btn = driver.find_element(By.XPATH, '//button[contains(text(),"Verify") or contains(text(),"Submit") or contains(text(),"Confirm")]')
+            ActionChains(driver).move_to_element(verify_btn).click().perform()
+        except Exception:
+            from selenium.webdriver.common.keys import Keys
+            code_inputs[-1].send_keys(Keys.ENTER)
+
+        _human_delay(5, 8)
+        snap(driver, "after_verify", f"After verification. URL: {driver.current_url}")
+
+        if "login" not in driver.current_url.lower():
+            steps[-1]["note"] = "LOGIN SUCCESS after verification!"
+            _save_cookies(driver, username)
+        else:
+            body_text = driver.find_element(By.TAG_NAME, "body").text
+            if "incorrect" in body_text.lower() or "invalid" in body_text.lower() or "wrong" in body_text.lower():
+                steps[-1]["note"] = "WRONG CODE - try again with correct code"
+                return steps
+            steps[-1]["note"] = f"Still on login page after verify. Body: {body_text[:200]}"
+
+    except Exception as e:
+        snap(driver, "verify_exception", f"Error: {str(e)}")
+    finally:
+        _pending_verification.pop(username, None)
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+    return steps
+
+
+async def submit_verification_code(username: str, code: str) -> list[dict]:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_executor, _submit_code_sync, username, code)
 
 
 async def test_login(username: str, password: str, proxy: str = "") -> list[dict]:

@@ -756,7 +756,23 @@ async function testLogin() {
                     </div>`;
                 }).join('');
             const lastStep = data.steps[data.steps.length - 1];
-            if (lastStep.note && lastStep.note.includes('SUCCESS')) {
+            if (lastStep.note && lastStep.note.includes('WAITING_FOR_CODE')) {
+                const verifyUser = data.username || manualUser || '';
+                results.innerHTML += `
+                <div class="card" style="border-color:var(--yellow);margin-top:12px;">
+                    <div style="font-size:14px;font-weight:600;color:var(--yellow);margin-bottom:8px;">Email verification required</div>
+                    <div style="font-size:13px;color:var(--text-2);margin-bottom:12px;">TikTok sent a verification code to your email. Enter it below:</div>
+                    <div class="field" style="margin-bottom:10px;">
+                        <input type="text" id="verify-code" placeholder="Enter 6-digit code" maxlength="10" style="text-align:center;font-size:20px;letter-spacing:6px;font-weight:700;">
+                    </div>
+                    <input type="hidden" id="verify-username" value="${esc(verifyUser)}">
+                    <button class="btn btn-primary" id="btn-verify" onclick="submitVerifyCode()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        Verify
+                    </button>
+                </div>`;
+                toast('Check your email for the code', 'success');
+            } else if (lastStep.note && lastStep.note.includes('SUCCESS')) {
                 toast('Login successful!', 'success');
             } else {
                 toast('Login failed - check screenshots', 'error');
@@ -770,6 +786,60 @@ async function testLogin() {
     btn.disabled = false;
     btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg> Test login';
     document.getElementById('test-user').dataset.accountId = '';
+}
+
+async function submitVerifyCode() {
+    const code = document.getElementById('verify-code').value.trim();
+    const username = document.getElementById('verify-username').value;
+    if (!code) { toast('Enter the verification code', 'error'); return; }
+
+    const btn = document.getElementById('btn-verify');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Verifying...';
+
+    try {
+        const res = await fetch(API + '/api/verify-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, code })
+        });
+        const data = await res.json();
+        const results = document.getElementById('test-results');
+
+        if (data.steps) {
+            results.innerHTML += '<div class="section-label" style="margin-top:16px;">Verification steps</div>' +
+                data.steps.filter(s => s.step && s.step.startsWith('code_') || s.step === 'after_verify' || s.step === 'verify_exception').map((s, i) => {
+                    const isSuccess = s.note && s.note.includes('SUCCESS');
+                    const isError = s.note && (s.note.includes('WRONG') || s.note.includes('Error'));
+                    const borderColor = isSuccess ? 'var(--green)' : isError ? 'var(--accent)' : 'var(--border)';
+                    return `<div class="screen-wrap" style="border-color:${borderColor};">
+                        <img src="${API}/api/errors/${encodeURIComponent(s.file)}" onclick="window.open(this.src)" onerror="this.style.display='none'">
+                        <div class="screen-meta" style="color:${isSuccess?'var(--green)':isError?'var(--accent)':'var(--text-2)'};">
+                            <strong>${esc(s.step)}</strong><br>${esc(s.note || '')}
+                        </div>
+                    </div>`;
+                }).join('');
+
+            const lastStep = data.steps[data.steps.length - 1];
+            if (lastStep.note && lastStep.note.includes('SUCCESS')) {
+                toast('Login successful after verification!', 'success');
+            } else if (lastStep.note && lastStep.note.includes('WRONG')) {
+                toast('Wrong code, try again', 'error');
+                btn.disabled = false;
+                btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Verify';
+                return;
+            } else {
+                toast('Verification completed - check screenshots', 'error');
+            }
+        } else if (data.error) {
+            toast(data.error, 'error');
+        }
+    } catch (e) {
+        toast('Connection error', 'error');
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Verify';
 }
 
 async function loadErrors() {
