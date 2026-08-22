@@ -27,6 +27,42 @@ async def health_handler(request):
         return web.json_response({"status": "ok"})
 
 
+async def dashboard_handler(request):
+    try:
+        import database as db
+        stats = await db.get_stats()
+    except Exception:
+        stats = {"accounts_active": 0, "accounts_total": 0, "comments_sent": 0, "comments_errors": 0, "active_tasks": 0}
+    html = f"""<!DOCTYPE html>
+<html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>TikTok Commenter</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:'Inter',sans-serif;background:#0C0C0E;color:#E4E4E8;min-height:100vh;display:flex;align-items:center;justify-content:center}}
+.w{{max-width:400px;width:100%;padding:32px 24px}}
+h1{{font-size:22px;font-weight:700;letter-spacing:-0.3px;margin-bottom:4px}}
+.sub{{font-size:13px;color:#5C5C66;margin-bottom:28px}}
+.g{{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px}}
+.s{{background:#161619;border:1px solid #2A2A30;border-radius:10px;padding:16px}}
+.sv{{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums}}
+.sl{{font-size:11px;color:#5C5C66;text-transform:uppercase;letter-spacing:0.5px;margin-top:4px}}
+.sa .sv{{color:#E84D3A}}.sg .sv{{color:#2DB86A}}
+.b{{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:6px;font-size:12px;font-weight:500;background:rgba(45,184,106,0.12);color:#2DB86A}}
+.d{{width:6px;height:6px;border-radius:50%;background:#2DB86A;animation:p 2s infinite}}
+@keyframes p{{0%,100%{{opacity:1}}50%{{opacity:.3}}}}
+</style></head><body><div class="w">
+<h1>TikTok Commenter</h1><p class="sub">Automation panel</p>
+<div class="g">
+<div class="s sa"><div class="sv">{stats['comments_sent']}</div><div class="sl">Sent</div></div>
+<div class="s"><div class="sv">{stats['comments_errors']}</div><div class="sl">Errors</div></div>
+<div class="s sg"><div class="sv">{stats['accounts_active']}</div><div class="sl">Accounts</div></div>
+<div class="s"><div class="sv">{stats['active_tasks']}</div><div class="sl">Tasks</div></div>
+</div><div class="b"><span class="d"></span>Bot running</div>
+</div></body></html>"""
+    return web.Response(text=html, content_type="text/html")
+
+
 async def webapp_handler(request):
     webapp_path = os.path.join(os.path.dirname(__file__), "webapp", "index.html")
     if os.path.exists(webapp_path):
@@ -36,7 +72,7 @@ async def webapp_handler(request):
 
 async def start_health_server():
     app = web.Application()
-    app.router.add_get("/", health_handler)
+    app.router.add_get("/", dashboard_handler)
     app.router.add_get("/health", health_handler)
     app.router.add_get("/webapp", webapp_handler)
     port = int(os.environ.get("PORT", 8080))

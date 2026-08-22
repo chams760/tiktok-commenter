@@ -2,311 +2,613 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>TikTok Commenter</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: var(--tg-theme-bg-color, #ffffff);
-            --text: var(--tg-theme-text-color, #000000);
-            --hint: var(--tg-theme-hint-color, #999999);
-            --link: var(--tg-theme-link-color, #2481cc);
-            --btn: var(--tg-theme-button-color, #2481cc);
-            --btn-text: var(--tg-theme-button-text-color, #ffffff);
-            --secondary-bg: var(--tg-theme-secondary-bg-color, #f0f0f0);
+            --bg: #0C0C0E;
+            --surface: #161619;
+            --surface-2: #1E1E22;
+            --surface-3: #26262B;
+            --border: #2A2A30;
+            --text: #E4E4E8;
+            --text-2: #9B9BA6;
+            --text-3: #5C5C66;
+            --accent: #E84D3A;
+            --accent-dim: rgba(232, 77, 58, 0.12);
+            --accent-hover: #D44330;
+            --green: #2DB86A;
+            --green-dim: rgba(45, 184, 106, 0.12);
+            --red: #E84D3A;
+            --red-dim: rgba(232, 77, 58, 0.12);
+            --radius: 10px;
+            --radius-sm: 6px;
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
             background: var(--bg);
             color: var(--text);
-            padding: 16px;
             line-height: 1.5;
+            min-height: 100vh;
+            padding-bottom: 72px;
+            -webkit-font-smoothing: antialiased;
         }
 
-        .tabs {
-            display: flex;
-            gap: 4px;
-            margin-bottom: 20px;
-            background: var(--secondary-bg);
-            border-radius: 10px;
-            padding: 4px;
+        /* ── Header ── */
+        .header {
+            padding: 20px 20px 0;
         }
 
-        .tab {
-            flex: 1;
-            padding: 10px 8px;
-            text-align: center;
-            border: none;
-            background: transparent;
-            color: var(--hint);
+        .header-title {
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+        }
+
+        .header-sub {
             font-size: 13px;
-            font-weight: 600;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.2s;
+            color: var(--text-3);
+            margin-top: 2px;
         }
 
-        .tab.active {
-            background: var(--btn);
-            color: var(--btn-text);
+        /* ── Panels ── */
+        .panel {
+            display: none;
+            padding: 16px 20px;
+            animation: fadeIn 0.2s ease;
         }
 
-        .panel { display: none; }
         .panel.active { display: block; }
 
-        h2 {
-            font-size: 18px;
-            margin-bottom: 16px;
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
         }
 
-        label {
-            display: block;
+        /* ── Section titles ── */
+        .section-label {
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            color: var(--text-3);
+            margin-bottom: 10px;
+            margin-top: 20px;
+        }
+
+        .section-label:first-child { margin-top: 0; }
+
+        /* ── Cards ── */
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-bottom: 10px;
+        }
+
+        /* ── Form elements ── */
+        .field { margin-bottom: 16px; }
+
+        .field-label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
             font-size: 13px;
-            color: var(--hint);
-            margin-bottom: 6px;
-            margin-top: 14px;
+            font-weight: 500;
+            color: var(--text-2);
+            margin-bottom: 8px;
         }
 
-        input, textarea {
+        .field-label svg {
+            width: 14px;
+            height: 14px;
+            opacity: 0.5;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        textarea {
             width: 100%;
-            padding: 12px;
-            border: 1px solid var(--secondary-bg);
-            border-radius: 10px;
-            background: var(--secondary-bg);
+            padding: 12px 14px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface-2);
             color: var(--text);
-            font-size: 15px;
+            font-family: inherit;
+            font-size: 14px;
             outline: none;
-            transition: border-color 0.2s;
+            transition: border-color 0.15s, background 0.15s;
         }
 
-        input:focus, textarea:focus {
-            border-color: var(--btn);
+        input[type="text"]:focus,
+        input[type="number"]:focus,
+        textarea:focus {
+            border-color: var(--accent);
+            background: var(--surface-3);
+        }
+
+        input::placeholder,
+        textarea::placeholder {
+            color: var(--text-3);
         }
 
         textarea {
-            min-height: 80px;
+            min-height: 88px;
             resize: vertical;
+            line-height: 1.5;
         }
 
-        .btn {
-            display: block;
-            width: 100%;
-            padding: 14px;
-            margin-top: 20px;
-            border: none;
-            border-radius: 10px;
-            background: var(--btn);
-            color: var(--btn-text);
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: opacity 0.2s;
-        }
-
-        .btn:active { opacity: 0.7; }
-        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-        .btn-danger {
-            background: #ff3b30;
-            color: #fff;
-        }
-
-        .info-card {
-            background: var(--secondary-bg);
-            border-radius: 12px;
-            padding: 16px;
-            margin-bottom: 12px;
-        }
-
-        .info-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 8px 0;
-            border-bottom: 1px solid rgba(128,128,128,0.1);
-        }
-
-        .info-row:last-child { border-bottom: none; }
-
-        .info-label { color: var(--hint); font-size: 14px; }
-        .info-value { font-weight: 600; font-size: 14px; }
-
-        .range-group {
+        /* ── Range slider ── */
+        .range-row {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 14px;
         }
 
-        .range-group input[type="range"] {
+        .range-row input[type="range"] {
             flex: 1;
-            padding: 0;
-            background: transparent;
-            border: none;
+            -webkit-appearance: none;
+            appearance: none;
+            height: 4px;
+            background: var(--surface-3);
+            border-radius: 2px;
+            outline: none;
+        }
+
+        .range-row input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            background: var(--accent);
+            border-radius: 50%;
+            cursor: pointer;
+            border: 2px solid var(--bg);
+            box-shadow: 0 0 0 1px var(--accent);
         }
 
         .range-val {
-            min-width: 40px;
-            text-align: right;
-            font-weight: 600;
             font-size: 15px;
-        }
-
-        .status-badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 6px;
-            font-size: 12px;
             font-weight: 600;
+            font-variant-numeric: tabular-nums;
+            min-width: 36px;
+            text-align: right;
+            color: var(--text);
         }
 
-        .status-running { background: #34c759; color: #fff; }
-        .status-done { background: var(--hint); color: #fff; }
-        .status-error { background: #ff3b30; color: #fff; }
+        /* ── Buttons ── */
+        .btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            width: 100%;
+            padding: 14px 20px;
+            border: none;
+            border-radius: var(--radius);
+            font-family: inherit;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s, transform 0.1s;
+        }
+
+        .btn:active { transform: scale(0.98); }
+        .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+
+        .btn svg { width: 18px; height: 18px; }
+
+        .btn-primary {
+            background: var(--accent);
+            color: #fff;
+        }
+
+        .btn-primary:hover { background: var(--accent-hover); }
+
+        .btn-secondary {
+            background: var(--surface-2);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+
+        .btn-danger {
+            background: var(--red-dim);
+            color: var(--red);
+            border: 1px solid transparent;
+        }
+
+        .btn + .btn { margin-top: 8px; }
+
+        /* ── File upload ── */
+        .file-drop {
+            border: 1px dashed var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.15s, background 0.15s;
+        }
+
+        .file-drop:hover {
+            border-color: var(--text-3);
+            background: var(--surface);
+        }
+
+        .file-drop svg {
+            width: 28px;
+            height: 28px;
+            color: var(--text-3);
+            margin-bottom: 8px;
+        }
+
+        .file-drop-text {
+            font-size: 13px;
+            color: var(--text-3);
+        }
+
+        .file-drop-text strong {
+            color: var(--accent);
+            font-weight: 500;
+        }
+
+        .file-drop input[type="file"] {
+            display: none;
+        }
+
+        /* ── Separator ── */
+        .sep {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin: 16px 0;
+        }
+
+        .sep::before, .sep::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--border);
+        }
+
+        .sep span {
+            font-size: 12px;
+            color: var(--text-3);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* ── Settings rows ── */
+        .setting-item {
+            padding: 14px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .setting-item:last-child { border-bottom: none; }
+
+        .setting-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .setting-header svg {
+            width: 16px;
+            height: 16px;
+            color: var(--text-3);
+        }
+
+        .setting-title {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .delay-row {
+            display: flex;
+            gap: 10px;
+        }
+
+        .delay-field {
+            flex: 1;
+        }
+
+        .delay-field input {
+            text-align: center;
+        }
+
+        .delay-label {
+            text-align: center;
+            font-size: 11px;
+            color: var(--text-3);
+            margin-top: 4px;
+        }
+
+        /* ── Bottom tab bar ── */
+        .tabbar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            display: flex;
+            background: var(--surface);
+            border-top: 1px solid var(--border);
+            padding: 6px 0 env(safe-area-inset-bottom, 8px);
+            z-index: 100;
+        }
+
+        .tabbar-item {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 3px;
+            padding: 8px 4px;
+            border: none;
+            background: none;
+            cursor: pointer;
+            transition: color 0.15s;
+            color: var(--text-3);
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .tabbar-item.active { color: var(--accent); }
+
+        .tabbar-item svg {
+            width: 22px;
+            height: 22px;
+        }
+
+        .tabbar-label {
+            font-family: inherit;
+            font-size: 10px;
+            font-weight: 500;
+            letter-spacing: 0.2px;
+        }
+
+        /* ── Toast ── */
+        .toast {
+            position: fixed;
+            top: 16px;
+            left: 20px;
+            right: 20px;
+            padding: 14px 16px;
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: 13px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            z-index: 200;
+            transform: translateY(-100px);
+            opacity: 0;
+            transition: transform 0.25s ease, opacity 0.25s ease;
+        }
+
+        .toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        .toast.success { border-color: var(--green); color: var(--green); }
+        .toast.error { border-color: var(--red); color: var(--red); }
+
+        .toast svg { width: 18px; height: 18px; flex-shrink: 0; }
     </style>
 </head>
 <body>
-    <div class="tabs">
-        <button class="tab active" onclick="showTab('task')">Задача</button>
-        <button class="tab" onclick="showTab('accounts')">Аккаунты</button>
-        <button class="tab" onclick="showTab('settings')">Настройки</button>
+
+    <div id="toast" class="toast"></div>
+
+    <div class="header">
+        <div class="header-title">TikTok Commenter</div>
+        <div class="header-sub">Automation panel</div>
     </div>
 
-    <!-- Создание задачи -->
+    <!-- ── Task panel ── -->
     <div id="panel-task" class="panel active">
-        <h2>Новая задача</h2>
 
-        <label>Поисковый запрос</label>
-        <input type="text" id="query" placeholder="Например: заработок онлайн">
+        <div class="section-label">Новая задача</div>
 
-        <label>Текст комментария</label>
-        <textarea id="comment" placeholder="Текст, который будет оставлен под видео"></textarea>
-
-        <label>Лимит комментариев</label>
-        <div class="range-group">
-            <input type="range" id="limit" min="1" max="500" value="50" oninput="document.getElementById('limit-val').textContent=this.value">
-            <span class="range-val" id="limit-val">50</span>
+        <div class="field">
+            <div class="field-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                Поисковый запрос
+            </div>
+            <input type="text" id="query" placeholder="Какие видео искать...">
         </div>
 
-        <button class="btn" onclick="createTask()">Запустить задачу</button>
+        <div class="field">
+            <div class="field-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                Текст комментария
+            </div>
+            <textarea id="comment" placeholder="Что написать под видео..."></textarea>
+        </div>
+
+        <div class="field">
+            <div class="field-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+                Лимит комментариев
+            </div>
+            <div class="range-row">
+                <input type="range" id="limit" min="1" max="500" value="50" oninput="document.getElementById('limit-val').textContent=this.value">
+                <span class="range-val" id="limit-val">50</span>
+            </div>
+        </div>
+
+        <button class="btn btn-primary" onclick="createTask()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            Запустить
+        </button>
+
     </div>
 
-    <!-- Аккаунты -->
+    <!-- ── Accounts panel ── -->
     <div id="panel-accounts" class="panel">
-        <h2>Управление аккаунтами</h2>
 
-        <label>Вставьте аккаунты (login:password, по строке)</label>
-        <textarea id="accounts-input" rows="8" placeholder="user1@mail.com:password123&#10;user2@mail.com:pass456"></textarea>
+        <div class="section-label">Загрузка аккаунтов</div>
 
-        <button class="btn" onclick="uploadAccounts()">Загрузить аккаунты</button>
-
-        <div style="margin-top: 12px; text-align: center;">
-            <span style="color: var(--hint); font-size: 13px;">или</span>
+        <div class="field">
+            <div class="field-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                Вставьте аккаунты
+            </div>
+            <textarea id="accounts-input" rows="6" placeholder="login:password&#10;login2:password2&#10;login3:password3"></textarea>
         </div>
 
-        <label>Загрузить из файла</label>
-        <input type="file" id="file-input" accept=".txt" onchange="loadFile(event)" style="padding:8px;">
+        <button class="btn btn-primary" onclick="uploadAccounts()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Загрузить
+        </button>
+
+        <div class="sep"><span>или из файла</span></div>
+
+        <div class="file-drop" onclick="document.getElementById('file-input').click()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <div class="file-drop-text">Нажмите, чтобы выбрать <strong>.txt</strong> файл</div>
+            <input type="file" id="file-input" accept=".txt" onchange="loadFile(event)">
+        </div>
+
     </div>
 
-    <!-- Настройки -->
+    <!-- ── Settings panel ── -->
     <div id="panel-settings" class="panel">
-        <h2>Настройки</h2>
 
-        <div class="info-card">
-            <label>Макс. комментариев с 1 аккаунта в сутки</label>
-            <div class="range-group" style="margin-top:8px;">
-                <input type="range" id="max-per-day" min="5" max="200" value="50" oninput="document.getElementById('mpd-val').textContent=this.value">
-                <span class="range-val" id="mpd-val">50</span>
+        <div class="section-label">Лимиты</div>
+
+        <div class="card">
+            <div class="setting-item">
+                <div class="setting-header">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    <span class="setting-title">Комментариев с аккаунта в сутки</span>
+                </div>
+                <div class="range-row">
+                    <input type="range" id="max-per-day" min="5" max="200" value="50" oninput="document.getElementById('mpd-val').textContent=this.value">
+                    <span class="range-val" id="mpd-val">50</span>
+                </div>
             </div>
 
-            <label>Задержка между комментариями (сек)</label>
-            <div style="display:flex; gap:12px; margin-top:8px;">
-                <div style="flex:1;">
-                    <input type="number" id="delay-min" value="30" min="5" placeholder="Мин">
-                    <span style="font-size:12px; color:var(--hint);">мин.</span>
+            <div class="setting-item">
+                <div class="setting-header">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                    <span class="setting-title">Задержка между комментариями</span>
                 </div>
-                <div style="flex:1;">
-                    <input type="number" id="delay-max" value="90" min="10" placeholder="Макс">
-                    <span style="font-size:12px; color:var(--hint);">макс.</span>
+                <div class="delay-row">
+                    <div class="delay-field">
+                        <input type="number" id="delay-min" value="30" min="5">
+                        <div class="delay-label">мин. сек</div>
+                    </div>
+                    <div class="delay-field">
+                        <input type="number" id="delay-max" value="90" min="10">
+                        <div class="delay-label">макс. сек</div>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <button class="btn" onclick="saveSettings()">Сохранить настройки</button>
+        <button class="btn btn-primary" onclick="saveSettings()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            Сохранить
+        </button>
+
     </div>
+
+    <!-- ── Tab bar ── -->
+    <nav class="tabbar">
+        <button class="tabbar-item active" onclick="showTab('task', this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <span class="tabbar-label">Задача</span>
+        </button>
+        <button class="tabbar-item" onclick="showTab('accounts', this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            <span class="tabbar-label">Аккаунты</span>
+        </button>
+        <button class="tabbar-item" onclick="showTab('settings', this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <span class="tabbar-label">Настройки</span>
+        </button>
+    </nav>
 
     <script>
         const tg = window.Telegram.WebApp;
         tg.ready();
         tg.expand();
+        tg.setHeaderColor('#0C0C0E');
+        tg.setBackgroundColor('#0C0C0E');
 
-        function showTab(name) {
+        function showTab(name, el) {
             document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tabbar-item').forEach(t => t.classList.remove('active'));
             document.getElementById('panel-' + name).classList.add('active');
-            event.target.classList.add('active');
+            if (el) el.classList.add('active');
+        }
+
+        function toast(text, type) {
+            const t = document.getElementById('toast');
+            const icon = type === 'success'
+                ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
+                : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
+            t.className = 'toast ' + type;
+            t.innerHTML = icon + '<span>' + text + '</span>';
+            requestAnimationFrame(() => t.classList.add('show'));
+            setTimeout(() => t.classList.remove('show'), 2500);
         }
 
         function createTask() {
             const query = document.getElementById('query').value.trim();
             const comment = document.getElementById('comment').value.trim();
             const limit = document.getElementById('limit').value;
-
             if (!query || !comment) {
-                tg.showAlert('Заполните запрос и текст комментария');
+                toast('Заполните запрос и комментарий', 'error');
                 return;
             }
-
             tg.sendData(JSON.stringify({
                 action: 'create_task',
-                query: query,
-                comment: comment,
-                limit: limit
+                query, comment, limit
             }));
-
-            tg.showAlert('Задача отправлена!');
+            toast('Задача отправлена', 'success');
         }
 
         function uploadAccounts() {
             const raw = document.getElementById('accounts-input').value.trim();
             if (!raw) {
-                tg.showAlert('Вставьте аккаунты');
+                toast('Вставьте аккаунты', 'error');
                 return;
             }
-
             tg.sendData(JSON.stringify({
                 action: 'upload_accounts',
                 accounts: raw
             }));
-
-            tg.showAlert('Аккаунты отправлены!');
+            toast('Аккаунты загружены', 'success');
         }
 
         function loadFile(event) {
             const file = event.target.files[0];
             if (!file) return;
-
             const reader = new FileReader();
             reader.onload = function(e) {
                 document.getElementById('accounts-input').value = e.target.result;
+                toast('Файл загружен, нажмите "Загрузить"', 'success');
             };
             reader.readAsText(file);
         }
 
         function saveSettings() {
-            const maxPerDay = document.getElementById('max-per-day').value;
-            const delayMin = document.getElementById('delay-min').value;
-            const delayMax = document.getElementById('delay-max').value;
-
             tg.sendData(JSON.stringify({
                 action: 'save_settings',
-                max_per_day: maxPerDay,
-                delay_min: delayMin,
-                delay_max: delayMax
+                max_per_day: document.getElementById('max-per-day').value,
+                delay_min: document.getElementById('delay-min').value,
+                delay_max: document.getElementById('delay-max').value
             }));
-
-            tg.showAlert('Настройки сохранены!');
+            toast('Настройки сохранены', 'success');
         }
     </script>
 </body>
