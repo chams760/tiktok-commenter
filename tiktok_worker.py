@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 
 from loguru import logger
 from playwright.async_api import async_playwright, Page, Browser, BrowserContext
-from playwright_stealth import stealth_async
 
 import config
 import database as db
@@ -57,6 +56,37 @@ async def _human_type(page: Page, selector: str, text: str):
     await _human_delay(200, 500)
 
 
+_STEALTH_JS = """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+
+Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+
+window.chrome = { runtime: {}, loadTimes: function(){}, csi: function(){} };
+
+const originalQuery = window.navigator.permissions.query;
+window.navigator.permissions.query = (parameters) =>
+    parameters.name === 'notifications'
+        ? Promise.resolve({ state: Notification.permission })
+        : originalQuery(parameters);
+
+Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
+Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 4});
+Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
+
+const getParameter = WebGLRenderingContext.prototype.getParameter;
+WebGLRenderingContext.prototype.getParameter = function(parameter) {
+    if (parameter === 37445) return 'Intel Inc.';
+    if (parameter === 37446) return 'Intel Iris OpenGL Engine';
+    return getParameter.call(this, parameter);
+};
+"""
+
+
+async def _apply_stealth(page: Page):
+    await page.add_init_script(_STEALTH_JS)
+
+
 async def _create_stealth_context(browser: Browser, proxy_config: dict | None = None) -> BrowserContext:
     profile = _random_profile()
     ctx_opts = {
@@ -67,6 +97,7 @@ async def _create_stealth_context(browser: Browser, proxy_config: dict | None = 
         "color_scheme": "light",
     }
     ctx = await browser.new_context(**ctx_opts)
+    await ctx.add_init_script(_STEALTH_JS)
     return ctx
 
 
@@ -150,7 +181,7 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
         browser = await pw.chromium.launch(**launch_opts)
         ctx = await _create_stealth_context(browser, proxy_config)
         page = await ctx.new_page()
-        await stealth_async(page)
+        await _apply_stealth(page)
 
         try:
             await page.goto("https://www.tiktok.com/login/phone-or-email/email", wait_until="domcontentloaded")
@@ -217,7 +248,7 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
 
 async def login_account(page: Page, username: str, password: str) -> bool:
     try:
-        await stealth_async(page)
+        await _apply_stealth(page)
         await page.goto("https://www.tiktok.com/login/phone-or-email/email", wait_until="domcontentloaded")
         await _human_delay(3000, 5000)
 
@@ -313,7 +344,7 @@ async def run_task(task_id: int):
             )
             probe_ctx = await _create_stealth_context(browser)
             probe_page = await probe_ctx.new_page()
-            await stealth_async(probe_page)
+            await _apply_stealth(probe_page)
             video_urls = await search_videos(probe_page, task["search_query"], task["max_comments"])
             await probe_ctx.close()
             await browser.close()
@@ -350,7 +381,7 @@ async def run_task(task_id: int):
                 browser = await pw.chromium.launch(**launch_opts)
                 ctx = await _create_stealth_context(browser, proxy_config)
                 page = await ctx.new_page()
-                await stealth_async(page)
+                await _apply_stealth(page)
 
                 _active_pages[task_id] = page
 
