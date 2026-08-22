@@ -226,7 +226,7 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
 
     async with async_playwright() as pw:
         launch_opts = {
-            "headless": True,
+            "headless": False,
             "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--no-first-run",
@@ -418,7 +418,7 @@ async def run_task(task_id: int):
 
         try:
             browser = await pw.chromium.launch(
-                headless=True,
+                headless=False,
                 args=["--disable-blink-features=AutomationControlled", "--no-first-run", "--no-default-browser-check"],
             )
             probe_ctx = await _create_stealth_context(browser)
@@ -450,7 +450,7 @@ async def run_task(task_id: int):
 
                 proxy_config = parse_proxy(account.get("proxy", ""))
                 launch_opts = {
-                    "headless": True,
+                    "headless": False,
                     "args": ["--disable-blink-features=AutomationControlled", "--no-first-run", "--no-default-browser-check"],
                 }
                 if proxy_config:
