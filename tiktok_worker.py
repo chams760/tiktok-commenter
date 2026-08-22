@@ -244,6 +244,19 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
         await _apply_stealth(page)
 
         try:
+            try:
+                await page.goto("https://api.ipify.org?format=json", wait_until="domcontentloaded")
+                await _human_delay(1000, 2000)
+                ip_text = await page.locator("body").inner_text()
+                proxy_note = f"IP: {ip_text}"
+                if proxy_config:
+                    proxy_note += f" | Proxy: {proxy_config['server']}"
+                else:
+                    proxy_note += " | NO PROXY"
+                await snap(page, "ip_check", proxy_note)
+            except Exception:
+                await snap(page, "ip_check", "Could not check IP")
+
             has_cookies = await _load_cookies(ctx, username)
             if has_cookies:
                 if await _check_logged_in(page):
