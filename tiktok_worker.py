@@ -281,16 +281,14 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
 
-    proxy_has_auth = False
+    _proxy_auth_creds = None
     if proxy_str and proxy_str.strip():
         parsed = _parse_proxy_parts(proxy_str)
         if parsed:
             host, port, user, passw = parsed
-            if user and passw:
-                proxy_has_auth = True
-                ext_dir = _make_proxy_auth_extension_dir(host, port, user, passw)
-                options.add_argument(f"--load-extension={ext_dir}")
             options.add_argument(f"--proxy-server=http://{host}:{port}")
+            if user and passw:
+                _proxy_auth_creds = (user, passw)
 
     chrome_binary = None
     for path in ["/usr/bin/google-chrome-stable", "/usr/bin/google-chrome", "/usr/bin/chromium"]:
@@ -303,6 +301,21 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
     service = Service("/usr/local/bin/chromedriver")
     driver = webdriver.Chrome(service=service, options=options)
     driver.set_window_size(1920, 1080)
+
+    # Proxy auth via CDP (works in headless, no extension needed)
+    if _proxy_auth_creds:
+        try:
+            driver.execute_cdp_cmd("Network.enable", {})
+            driver.execute_cdp_cmd("Network.setExtraHTTPHeaders", {
+                "headers": {
+                    "Proxy-Authorization": "Basic " + __import__('base64').b64encode(
+                        f"{_proxy_auth_creds[0]}:{_proxy_auth_creds[1]}".encode()
+                    ).decode()
+                }
+            })
+            logger.info("Proxy auth set via CDP Network headers")
+        except Exception as e:
+            logger.warning(f"CDP proxy auth failed: {e}")
 
     # CDP stealth: inject BEFORE any page loads
     try:
@@ -344,7 +357,7 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
     except Exception as e:
         logger.debug(f"selenium-stealth failed: {e}")
 
-    logger.info(f"Chrome driver created | proxy={bool(proxy_str)} | auth={proxy_has_auth}")
+    logger.info(f"Chrome driver created | proxy={bool(proxy_str)} | auth={bool(_proxy_auth_creds)}")
     return driver
 
 
@@ -847,12 +860,25 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                 return {"ok": True, "steps": steps}
             step("cookies_expired", "Saved cookies expired")
 
+        # Step 0: Verify proxy connectivity
+        if proxy:
+            try:
+                driver.get("https://api.ipify.org?format=json")
+                time.sleep(3)
+                ip_text = driver.find_element(By.TAG_NAME, "body").text
+                step("proxy_check", f"Proxy OK. IP: {ip_text}")
+            except Exception as e:
+                snap(driver, "proxy_fail")
+                step("proxy_fail", f"Proxy connection failed: {e}")
+                driver.quit()
+                return {"ok": False, "steps": steps, "error": f"Proxy failed: {e}"}
+
         # Step 1: Warm up — visit homepage
         driver.get("https://www.tiktok.com")
-        time.sleep(3)
+        time.sleep(4)
         _dismiss_cookie_banner(driver)
         _random_mouse_move(driver, 3)
-        step("homepage", "Homepage visited")
+        step("homepage", f"Homepage visited. Src: {len(driver.page_source)}b")
 
         # Step 2: Go to login page
         driver.get("https://www.tiktok.com/login/phone-or-email/email")
