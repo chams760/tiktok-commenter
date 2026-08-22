@@ -1,12 +1,11 @@
 import email as email_lib
-import hashlib
 import imaplib
 import json
 import os
 import re
 import time
 
-import requests
+from curl_cffi import requests
 from loguru import logger
 
 SESSIONS_DIR = os.path.join(os.path.dirname(__file__), "sessions")
@@ -57,16 +56,17 @@ def _parse_proxy_for_requests(proxy_str: str) -> dict:
     return {}
 
 
-def _save_api_cookies(session: requests.Session, username: str):
+def _save_api_cookies(session, username: str):
     safe = username.replace("@", "_at_").replace(".", "_")
     path = os.path.join(SESSIONS_DIR, f"{safe}.json")
     cookies = []
-    for c in session.cookies:
+    jar = session.cookies
+    for c in jar:
         cookies.append({
             "name": c.name,
             "value": c.value,
-            "domain": c.domain or ".tiktok.com",
-            "path": c.path or "/",
+            "domain": getattr(c, "domain", ".tiktok.com") or ".tiktok.com",
+            "path": getattr(c, "path", "/") or "/",
         })
     with open(path, "w") as f:
         json.dump(cookies, f)
@@ -138,14 +138,14 @@ def fetch_code_from_imap(email_addr: str, email_pass: str, imap_server: str = ""
     return None
 
 
-def _get_csrf(session: requests.Session) -> str:
+def _get_csrf(session) -> str:
     for c in session.cookies:
         if c.name == "tt_csrf_token":
             return c.value
     return ""
 
 
-def _post_api(session: requests.Session, url: str, data: dict, step_fn, step_name: str) -> dict | None:
+def _post_api(session, url: str, data: dict, step_fn, step_name: str) -> dict | None:
     csrf = _get_csrf(session)
     headers = {}
     if csrf:
@@ -189,25 +189,21 @@ def _post_api(session: requests.Session, url: str, data: dict, step_fn, step_nam
 def api_login(username: str, password: str, email_pass: str = "",
               imap_server: str = "", proxy: str = "") -> dict:
     steps = []
-    session = requests.Session()
 
-    proxies = _parse_proxy_for_requests(proxy)
-    if proxies:
-        session.proxies = proxies
+    proxy_url = ""
+    if proxy:
+        proxies = _parse_proxy_for_requests(proxy)
+        proxy_url = proxies.get("https", proxies.get("http", ""))
+
+    session = requests.Session(impersonate="chrome126")
+    if proxy_url:
+        session.proxies = {"http": proxy_url, "https": proxy_url}
 
     session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
         "Origin": "https://www.tiktok.com",
         "Referer": "https://www.tiktok.com/login/phone-or-email/email",
-        "sec-ch-ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-origin",
     })
 
     def step(name, note=""):
