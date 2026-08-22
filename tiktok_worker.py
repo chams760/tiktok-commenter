@@ -353,86 +353,114 @@ def _test_login_sync(username: str, password: str, proxy: str = "") -> list[dict
 
             _dismiss_cookie_banner(driver)
             _human_delay(1, 2)
-
-            page_html = driver.page_source
             snap(driver, "verify_after_cookie_dismiss", "After dismissing cookie banner")
 
-            def _is_in_cookie_block(el):
-                try:
-                    parent_html = el.find_element(By.XPATH, './ancestor::*[contains(@class,"cookie") or contains(@class,"consent") or contains(@class,"banner") or contains(@id,"cookie")]')
-                    return True
-                except Exception:
-                    return False
+            page_html = driver.page_source
+            html_path = os.path.join(SCREENSHOTS_DIR, f"verify_{ts}_page.html")
+            try:
+                with open(html_path, "w", encoding="utf-8") as hf:
+                    hf.write(page_html)
+            except Exception:
+                pass
 
             email_clicked = False
-            selectors = [
-                (By.CSS_SELECTOR, '[data-e2e*="email"], [data-e2e*="Email"]'),
-                (By.XPATH, '//*[contains(@class,"verify") or contains(@class,"Verify")]//descendant::*[contains(text(),"mail") or contains(text(),"Mail")]'),
-                (By.XPATH, '//div[contains(text(),"Email") or contains(text(),"email")]'),
-                (By.XPATH, '//span[contains(text(),"Email") or contains(text(),"email")]'),
-                (By.XPATH, '//button[contains(text(),"Email") or contains(text(),"email")]'),
-                (By.XPATH, '//a[contains(text(),"Email") or contains(text(),"email")]'),
-                (By.XPATH, '//p[contains(text(),"Email") or contains(text(),"email")]'),
-                (By.XPATH, '//label[contains(text(),"Email") or contains(text(),"email")]'),
-                (By.CSS_SELECTOR, '[class*="email"], [class*="Email"]'),
-            ]
-            for by, sel in selectors:
-                try:
-                    elements = driver.find_elements(by, sel)
-                    for el in elements:
-                        if el.is_displayed() and el.size['height'] > 0 and not _is_in_cookie_block(el):
-                            ActionChains(driver).move_to_element(el).pause(0.5).click().perform()
-                            _human_delay(2, 4)
-                            snap(driver, "verify_email_clicked", f"Clicked Email option via: {sel}")
-                            email_clicked = True
-                            break
-                    if email_clicked:
-                        break
-                except Exception:
-                    continue
+            result = driver.execute_script("""
+                function findAndClick() {
+                    // Strategy 1: find element containing masked email like "e***@" or "***@" or "@"
+                    var allEls = document.querySelectorAll('div, span, p, a, button, label');
+                    var candidates = [];
+                    for (var i = 0; i < allEls.length; i++) {
+                        var el = allEls[i];
+                        if (el.offsetHeight === 0 || el.offsetWidth === 0) continue;
+                        // skip cookie/consent elements
+                        var parent = el.closest('[class*="cookie"], [class*="consent"], [id*="cookie"]');
+                        if (parent) continue;
 
-            if not email_clicked:
-                try:
-                    all_els = driver.find_elements(By.XPATH, '//*[@role="button" or @tabindex or self::button or self::a]')
-                    for el in all_els:
-                        if not el.is_displayed() or el.size['height'] == 0:
-                            continue
-                        txt = el.text.lower().strip()
-                        if ('mail' in txt or 'email' in txt or 'почт' in txt) and not _is_in_cookie_block(el):
-                            ActionChains(driver).move_to_element(el).pause(0.5).click().perform()
-                            _human_delay(2, 4)
-                            snap(driver, "verify_email_clicked_fallback", f"Clicked via fallback: {el.text[:50]}")
-                            email_clicked = True
-                            break
-                except Exception:
-                    pass
+                        var t = (el.innerText || el.textContent || '').trim();
+                        var directText = '';
+                        for (var c = 0; c < el.childNodes.length; c++) {
+                            if (el.childNodes[c].nodeType === 3) directText += el.childNodes[c].textContent;
+                        }
+                        directText = directText.trim();
 
-            if not email_clicked:
-                try:
-                    driver.execute_script("""
-                        var els = document.querySelectorAll('*');
-                        for (var i = 0; i < els.length; i++) {
-                            var t = els[i].innerText || '';
-                            if (t.match(/^\\s*e-?mail\\s*$/i) && els[i].offsetHeight > 0) {
-                                els[i].click();
-                                return 'clicked';
+                        // masked email pattern: contains @ or *** with mail context
+                        if (directText.match(/\\*+.*@|@.*\\.(com|net|org|ru|mail)/i)) {
+                            candidates.push({el: el, priority: 1, text: directText});
+                        }
+                        // "email" as standalone word
+                        else if (directText.match(/^e-?mail$/i)) {
+                            candidates.push({el: el, priority: 2, text: directText});
+                        }
+                        // contains "email" or "Email" in a short text (not a paragraph)
+                        else if (directText.length < 50 && directText.match(/e-?mail/i)) {
+                            candidates.push({el: el, priority: 3, text: directText});
+                        }
+                        // "Send code" or "Отправить код"
+                        else if (directText.match(/send.*code|отправить.*код/i)) {
+                            candidates.push({el: el, priority: 4, text: directText});
+                        }
+                    }
+
+                    // Strategy 2: look for verification option containers (clickable cards)
+                    if (candidates.length === 0) {
+                        var containers = document.querySelectorAll('[class*="verify"] div, [class*="channel"] div, [class*="option"] div, [class*="method"] div');
+                        for (var j = 0; j < containers.length; j++) {
+                            var cel = containers[j];
+                            if (cel.offsetHeight === 0) continue;
+                            var ct = (cel.innerText || '').toLowerCase();
+                            if (ct.includes('mail') || ct.includes('@')) {
+                                candidates.push({el: cel, priority: 5, text: ct.substring(0, 50)});
                             }
                         }
-                        return 'not_found';
-                    """)
+                    }
+
+                    if (candidates.length === 0) return JSON.stringify({status: 'not_found', candidates: 0});
+
+                    // sort by priority
+                    candidates.sort(function(a, b) { return a.priority - b.priority; });
+                    var best = candidates[0];
+                    best.el.click();
+                    return JSON.stringify({status: 'clicked', text: best.text, priority: best.priority, total: candidates.length});
+                }
+                return findAndClick();
+            """)
+
+            try:
+                result_data = json.loads(result)
+                if result_data.get("status") == "clicked":
+                    email_clicked = True
                     _human_delay(2, 4)
-                    new_body = driver.find_element(By.TAG_NAME, "body").text
-                    if new_body != body_text:
-                        snap(driver, "verify_email_clicked_js", "Clicked Email via JS")
-                        email_clicked = True
-                except Exception:
-                    pass
+                    snap(driver, "verify_email_clicked", f"JS clicked: '{result_data.get('text', '')}' (p{result_data.get('priority')}, {result_data.get('total')} candidates)")
+                else:
+                    snap(driver, "verify_js_not_found", f"JS found 0 candidates")
+            except Exception as e:
+                snap(driver, "verify_js_error", f"JS error: {e}, result: {result}")
 
             if not email_clicked:
-                snap(driver, "verify_email_not_found", f"Could not find Email option. Page text: {body_text[:300]}")
+                snap(driver, "verify_email_not_found", f"Could not find Email option. Body: {body_text[:300]}")
                 _pending_verification[username] = {"driver": driver, "steps": steps, "snap": snap}
-                steps[-1]["note"] = "COULD_NOT_CLICK_EMAIL - check screenshot for page layout"
+                steps[-1]["note"] = "COULD_NOT_CLICK_EMAIL - check verify_*_page.html in screenshots for page structure"
                 return steps
+
+            _human_delay(2, 3)
+            new_body = driver.find_element(By.TAG_NAME, "body").text
+            if new_body == body_text:
+                snap(driver, "verify_click_no_change", "Page didn't change after click, trying parent element...")
+                driver.execute_script("""
+                    var allEls = document.querySelectorAll('div, span, p, a, button');
+                    for (var i = 0; i < allEls.length; i++) {
+                        var el = allEls[i];
+                        if (el.offsetHeight === 0) continue;
+                        var t = (el.innerText || '').toLowerCase();
+                        if ((t.includes('mail') || t.includes('@')) && t.length < 100) {
+                            var target = el.parentElement || el;
+                            target.click();
+                            return;
+                        }
+                    }
+                """)
+                _human_delay(2, 4)
+                snap(driver, "verify_parent_clicked", "Tried clicking parent element")
 
             _pending_verification[username] = {"driver": driver, "steps": steps, "snap": snap}
             steps[-1]["note"] = "WAITING_FOR_CODE - Enter the verification code sent to your email"
