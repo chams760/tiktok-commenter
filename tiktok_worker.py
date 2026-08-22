@@ -17,36 +17,6 @@ import undetected_chromedriver as uc
 import config
 import database as db
 
-_xvfb_proc = None
-
-def _ensure_xvfb():
-    global _xvfb_proc
-    if _xvfb_proc and _xvfb_proc.poll() is None:
-        os.environ["DISPLAY"] = ":99"
-        return True
-    # Kill any stale reference
-    _xvfb_proc = None
-    # Clear DISPLAY so Chrome doesn't try to connect to dead xvfb
-    os.environ.pop("DISPLAY", None)
-    try:
-        _xvfb_proc = subprocess.Popen(
-            ["Xvfb", ":99", "-screen", "0", "1920x1080x24", "-nolisten", "tcp", "-ac"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        time.sleep(1)
-        if _xvfb_proc.poll() is not None:
-            logger.warning("Xvfb exited immediately, using headless")
-            _xvfb_proc = None
-            return False
-        os.environ["DISPLAY"] = ":99"
-        logger.info("Xvfb started on :99")
-        return True
-    except FileNotFoundError:
-        logger.warning("Xvfb not found, using headless mode")
-        return False
-    except Exception as e:
-        logger.warning(f"Xvfb failed: {e}, using headless")
-        return False
 
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), "screenshots")
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
@@ -215,10 +185,7 @@ try {
 """
 
 
-def _create_driver(proxy_str: str = "", force_headless: bool = False) -> uc.Chrome:
-    has_display = _ensure_xvfb()
-    use_headless = force_headless or not has_display
-
+def _create_driver(proxy_str: str = "") -> uc.Chrome:
     options = uc.ChromeOptions()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
@@ -229,10 +196,8 @@ def _create_driver(proxy_str: str = "", force_headless: bool = False) -> uc.Chro
     options.add_argument("--lang=en-US")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--disable-infobars")
-    options.add_argument("--disable-extensions")
     options.add_argument("--disable-popup-blocking")
-    options.add_argument("--start-maximized")
-    options.add_argument("--remote-debugging-port=0")
+    options.add_argument("--headless=new")
 
     if proxy_str and proxy_str.strip():
         proxy = _parse_proxy_for_selenium(proxy_str)
@@ -249,7 +214,7 @@ def _create_driver(proxy_str: str = "", force_headless: bool = False) -> uc.Chro
 
     driver = uc.Chrome(
         options=options,
-        headless=use_headless,
+        headless=False,
         use_subprocess=True,
         version_main=chrome_ver,
     )
@@ -728,12 +693,8 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         try:
             driver = _create_driver(proxy)
         except Exception as e:
-            step("driver_error", f"Chrome failed with xvfb: {e}. Trying headless...")
-            try:
-                driver = _create_driver(proxy, force_headless=True)
-            except Exception as e2:
-                step("driver_fatal", str(e2))
-                return {"ok": False, "steps": steps, "error": f"Chrome failed: {e2}"}
+            step("driver_error", str(e))
+            return {"ok": False, "steps": steps, "error": f"Chrome failed: {e}"}
         step("init", f"Browser created | proxy: {bool(proxy)}")
 
         # Check saved cookies first
