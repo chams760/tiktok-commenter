@@ -138,6 +138,54 @@ def fetch_code_from_imap(email_addr: str, email_pass: str, imap_server: str = ""
     return None
 
 
+def _get_csrf(session: requests.Session) -> str:
+    for c in session.cookies:
+        if c.name == "tt_csrf_token":
+            return c.value
+    return ""
+
+
+def _post_api(session: requests.Session, url: str, data: dict, step_fn, step_name: str) -> dict | None:
+    csrf = _get_csrf(session)
+    headers = {}
+    if csrf:
+        headers["X-CSRFToken"] = csrf
+
+    for method in ["form", "json"]:
+        try:
+            if method == "form":
+                resp = session.post(url, data=data, headers=headers, timeout=15)
+            else:
+                resp = session.post(url, json=data, headers=headers, timeout=15)
+
+            try:
+                result = resp.json()
+            except Exception:
+                result = {"raw": resp.text[:300]}
+
+            step_fn(step_name, f"{url} ({method}) -> {resp.status_code}: {json.dumps(result, ensure_ascii=False)[:300]}")
+
+            status_code = result.get("status_code")
+            error_code = result.get("error_code")
+            data_field = result.get("data", {})
+            msg = str(result.get("message", "")).lower()
+            desc = str(result.get("description", "") or (data_field.get("description", "") if isinstance(data_field, dict) else "")).lower()
+
+            if error_code == 0 or (status_code == 0 and "doesn't match" not in (result.get("status_msg", ""))):
+                return {"success": True, "result": result, "desc": desc, "error_code": error_code}
+
+            if "maximum" in desc or "too many" in desc or error_code == 7:
+                return {"success": False, "rate_limited": True, "result": result, "desc": desc}
+
+            if "verify" in desc or error_code in (1105, 10000, 10202):
+                return {"success": False, "need_verify": True, "result": result, "desc": desc}
+
+        except Exception as e:
+            step_fn(f"{step_name}_error", f"{url} ({method}): {e}")
+
+    return None
+
+
 def api_login(username: str, password: str, email_pass: str = "",
               imap_server: str = "", proxy: str = "") -> dict:
     steps = []
@@ -148,13 +196,18 @@ def api_login(username: str, password: str, email_pass: str = "",
         session.proxies = proxies
 
     session.headers.update({
-        "User-Agent": "com.zhiliaoapp.musically/350103 (Linux; U; Android 13; en_US; Pixel 7; Build/TP1A.220624.014; Cronet/TTNetVersion:7be4f78f 2024-01-18)",
-        "Accept": "application/json",
-        "Accept-Encoding": "gzip, deflate",
-        "X-SS-DP": "1233",
-        "X-Tt-Store-Region": "us",
-        "X-Tt-Store-Region-Src": "uid",
-        "passport-sdk-version": "19",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Origin": "https://www.tiktok.com",
+        "Referer": "https://www.tiktok.com/login/phone-or-email/email",
+        "sec-ch-ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
     })
 
     def step(name, note=""):
@@ -167,198 +220,141 @@ def api_login(username: str, password: str, email_pass: str = "",
         resp = session.get("https://www.tiktok.com/", timeout=15)
         step("visit_homepage", f"Status: {resp.status_code}, cookies: {list(session.cookies.keys())}")
     except Exception as e:
-        step("visit_homepage_error", str(e))
+        step("visit_error", str(e))
+        return {"ok": False, "steps": steps, "error": str(e)}
 
     try:
         resp = session.get("https://www.tiktok.com/login/phone-or-email/email", timeout=15)
-        step("visit_login", f"Status: {resp.status_code}")
+        step("visit_login", f"Status: {resp.status_code}, cookies: {list(session.cookies.keys())}")
     except Exception as e:
         step("visit_login_error", str(e))
 
-    try:
-        send_code_urls = [
-            "https://www.tiktok.com/passport/web/email_code/send/",
-            "https://www.tiktok.com/api/passport/web/email_code/send/",
-            "https://www.tiktok.com/passport/email/code/send/",
+    csrf = _get_csrf(session)
+    step("csrf_token", f"CSRF: {csrf[:10]}..." if csrf else "No CSRF token found")
+
+    send_code_endpoints = [
+        "https://www.tiktok.com/passport/web/send_code/",
+        "https://www.tiktok.com/passport/web/email/send_code/",
+        "https://www.tiktok.com/api/passport/web/send_code/",
+        "https://www.tiktok.com/api/passport/web/email/send_code/",
+    ]
+
+    code_sent = False
+    for url in send_code_endpoints:
+        for code_type in [1, 3, "login"]:
+            r = _post_api(session, url, {
+                "email": username,
+                "type": code_type,
+                "aid": "1459",
+                "account_sdk_source": "web",
+                "mix_mode": 1,
+                "service": "https://www.tiktok.com",
+            }, step, "send_code")
+            if r and r.get("success"):
+                code_sent = True
+                step("code_sent", f"Code sent via {url} (type={code_type})")
+                break
+            if r and r.get("rate_limited"):
+                step("rate_limited", "Too many attempts. Use a proxy or wait.")
+                return {"ok": False, "steps": steps, "error": "Rate limited. Use a proxy."}
+        if code_sent:
+            break
+
+    if not code_sent:
+        step("send_code_failed", "Email code endpoints failed. Trying password login...")
+
+        pwd_endpoints = [
+            "https://www.tiktok.com/passport/web/user/login/",
+            "https://www.tiktok.com/api/passport/web/user/login/",
         ]
 
-        code_sent = False
-        for url in send_code_urls:
-            for content_type in ["form", "json"]:
-                try:
-                    if content_type == "form":
-                        resp = session.post(url, data={
-                            "email": username,
-                            "type": "login",
-                            "aid": "1459",
-                        }, timeout=15)
-                    else:
-                        resp = session.post(url, json={
-                            "email": username,
-                            "type": "login",
-                            "aid": "1459",
-                        }, timeout=15)
-
-                    try:
-                        result = resp.json()
-                    except Exception:
-                        result = {"raw": resp.text[:200]}
-
-                    step("send_code", f"URL: {url} ({content_type}) -> Status: {resp.status_code}, Response: {json.dumps(result, ensure_ascii=False)[:300]}")
-
-                    msg = str(result.get("message", "")).lower()
-                    data = result.get("data", {})
-                    if msg in ("success", "ok", "") and resp.status_code == 200 and data:
-                        code_sent = True
-                        break
-                    if result.get("error_code") == 0:
-                        code_sent = True
-                        break
-                except Exception as e:
-                    step("send_code_error", f"{url}: {e}")
-            if code_sent:
-                break
-
-        if not code_sent:
-            step("send_code_failed", "All endpoints failed to send code. Trying password login...")
-            return _api_password_login(session, username, password, email_pass, imap_server, steps)
-
-    except Exception as e:
-        step("send_code_exception", str(e))
-        return {"ok": False, "steps": steps, "error": str(e)}
-
-    if not email_pass:
-        step("waiting_for_code", "Code sent but no email_password provided for IMAP. Enter code manually.")
-        return {"ok": False, "steps": steps, "need_code": True}
-
-    step("imap_waiting", f"Waiting for code via IMAP ({_get_imap_server(username)})...")
-
-    code = fetch_code_from_imap(username, email_pass, imap_server, timeout=90)
-    if not code:
-        step("imap_no_code", "No code received in 90 seconds")
-        return {"ok": False, "steps": steps, "error": "Email code not received"}
-
-    step("imap_got_code", f"Got code: {code}")
-
-    login_urls = [
-        "https://www.tiktok.com/passport/web/email_code/login/",
-        "https://www.tiktok.com/api/passport/web/email_code/login/",
-        "https://www.tiktok.com/passport/email/code/login/",
-    ]
-
-    for url in login_urls:
-        for content_type in ["form", "json"]:
-            try:
-                payload = {"email": username, "code": code, "aid": "1459"}
-                if content_type == "form":
-                    resp = session.post(url, data=payload, timeout=15)
-                else:
-                    resp = session.post(url, json=payload, timeout=15)
-
-                try:
-                    result = resp.json()
-                except Exception:
-                    result = {"raw": resp.text[:200]}
-
-                step("login_with_code", f"{url} ({content_type}) -> {resp.status_code}: {json.dumps(result, ensure_ascii=False)[:300]}")
-
-                if result.get("error_code") == 0 or (result.get("data") and "session" in str(result.get("data", "")).lower()):
-                    _save_api_cookies(session, username)
-                    step("login_success", f"Logged in! Cookies: {list(session.cookies.keys())}")
-                    return {"ok": True, "steps": steps, "cookies": list(session.cookies.keys())}
-
-            except Exception as e:
-                step("login_code_error", f"{url}: {e}")
-
-    step("login_failed", "All login endpoints failed")
-    return {"ok": False, "steps": steps, "error": "Login with code failed"}
-
-
-def _api_password_login(session: requests.Session, username: str, password: str,
-                        email_pass: str, imap_server: str, steps: list) -> dict:
-
-    def step(name, note=""):
-        steps.append({"step": name, "note": note})
-        logger.info(f"API pwd login [{name}]: {note}")
-
-    login_urls = [
-        "https://www.tiktok.com/passport/web/user/login/",
-        "https://www.tiktok.com/api/passport/web/user/login/",
-    ]
-
-    for url in login_urls:
-        try:
-            payload = {
+        for url in pwd_endpoints:
+            r = _post_api(session, url, {
                 "email": username,
                 "password": password,
                 "mix_mode": 1,
                 "aid": "1459",
-            }
-            resp = session.post(url, data=payload, timeout=15)
-            try:
-                result = resp.json()
-            except Exception:
-                result = {"raw": resp.text[:200]}
+                "account_sdk_source": "web",
+                "service": "https://www.tiktok.com",
+            }, step, "password_login")
 
-            step("password_login", f"{url} -> {resp.status_code}: {json.dumps(result, ensure_ascii=False)[:300]}")
-
-            err_code = result.get("error_code", -1)
-            desc = str(result.get("description", "")).lower()
-
-            if err_code == 0:
+            if r and r.get("success"):
                 _save_api_cookies(session, username)
-                step("login_success", f"Password login successful! Cookies: {list(session.cookies.keys())}")
+                step("login_success", f"Password login OK! Cookies: {list(session.cookies.keys())}")
                 return {"ok": True, "steps": steps}
 
-            if "verify" in desc or err_code in (1105, 10000):
-                step("need_verify", f"Verification required: {desc}")
+            if r and r.get("rate_limited"):
+                step("rate_limited", "Too many attempts. Use a proxy or wait.")
+                return {"ok": False, "steps": steps, "error": "Rate limited. Use a proxy."}
 
-                verify_urls = [
-                    "https://www.tiktok.com/passport/web/send_code/",
-                    "https://www.tiktok.com/api/passport/web/send_code/",
-                ]
-                for vurl in verify_urls:
-                    try:
-                        vresp = session.post(vurl, data={
-                            "email": username,
-                            "type": "verify",
-                            "aid": "1459",
-                        }, timeout=15)
-                        vresult = vresp.json()
-                        step("verify_send", f"{vurl} -> {json.dumps(vresult, ensure_ascii=False)[:200]}")
-                    except Exception as e:
-                        step("verify_send_error", str(e))
+            if r and r.get("need_verify"):
+                step("need_verify", "TikTok requires verification after password login")
+                for send_url in send_code_endpoints:
+                    r2 = _post_api(session, send_url, {
+                        "email": username,
+                        "type": "verify",
+                        "aid": "1459",
+                        "account_sdk_source": "web",
+                    }, step, "verify_send_code")
+                    if r2 and r2.get("success"):
+                        code_sent = True
+                        break
+                if not code_sent:
+                    step("verify_send_failed", "Could not send verification code")
+                    return {"ok": False, "steps": steps, "error": "Could not send verification code"}
+                break
 
-                if not email_pass:
-                    step("need_email_pass", "Verification needed but no email password for IMAP")
-                    return {"ok": False, "steps": steps, "need_code": True}
+        if not code_sent:
+            step("all_failed", "All login methods failed")
+            return {"ok": False, "steps": steps, "error": "All login methods failed"}
 
-                code = fetch_code_from_imap(username, email_pass, imap_server, timeout=90)
-                if not code:
-                    step("imap_no_code", "Code not received")
-                    return {"ok": False, "steps": steps, "error": "Verification code not received"}
+    if not email_pass:
+        step("need_email_pass", "Code sent but no email password for IMAP auto-read")
+        return {"ok": False, "steps": steps, "need_code": True}
 
-                step("got_verify_code", f"Code: {code}")
+    step("imap_waiting", f"Waiting for code via IMAP ({_get_imap_server(username)})...")
+    code = fetch_code_from_imap(username, email_pass, imap_server, timeout=90)
+    if not code:
+        step("imap_no_code", "No verification code received in 90 seconds")
+        return {"ok": False, "steps": steps, "error": "Email code not received via IMAP"}
 
-                for vurl in ["https://www.tiktok.com/passport/web/verify_code/",
-                             "https://www.tiktok.com/api/passport/web/verify_code/"]:
-                    try:
-                        vresp = session.post(vurl, data={
-                            "email": username,
-                            "code": code,
-                            "aid": "1459",
-                        }, timeout=15)
-                        vresult = vresp.json()
-                        step("verify_code_submit", f"{vurl} -> {json.dumps(vresult, ensure_ascii=False)[:200]}")
-                        if vresult.get("error_code") == 0:
-                            _save_api_cookies(session, username)
-                            step("login_success", "Login with verification successful!")
-                            return {"ok": True, "steps": steps}
-                    except Exception as e:
-                        step("verify_submit_error", str(e))
+    step("imap_got_code", f"Got code: {code}")
 
-        except Exception as e:
-            step("password_login_error", f"{url}: {e}")
+    verify_endpoints = [
+        "https://www.tiktok.com/passport/web/user/login/",
+        "https://www.tiktok.com/passport/web/email/login/",
+        "https://www.tiktok.com/api/passport/web/user/login/",
+    ]
 
-    step("all_failed", "All login methods failed")
-    return {"ok": False, "steps": steps, "error": "All login methods failed"}
+    for url in verify_endpoints:
+        r = _post_api(session, url, {
+            "email": username,
+            "code": code,
+            "aid": "1459",
+            "mix_mode": 1,
+            "account_sdk_source": "web",
+            "service": "https://www.tiktok.com",
+        }, step, "login_with_code")
+        if r and r.get("success"):
+            _save_api_cookies(session, username)
+            step("login_success", f"Login successful! Cookies: {list(session.cookies.keys())}")
+            return {"ok": True, "steps": steps}
+
+    verify_code_endpoints = [
+        "https://www.tiktok.com/passport/web/verify_code/",
+        "https://www.tiktok.com/api/passport/web/verify_code/",
+    ]
+    for url in verify_code_endpoints:
+        r = _post_api(session, url, {
+            "email": username,
+            "code": code,
+            "aid": "1459",
+            "account_sdk_source": "web",
+        }, step, "verify_code")
+        if r and r.get("success"):
+            _save_api_cookies(session, username)
+            step("login_success", f"Verification successful! Cookies: {list(session.cookies.keys())}")
+            return {"ok": True, "steps": steps}
+
+    step("login_failed", "Could not complete login with the code")
+    return {"ok": False, "steps": steps, "error": "Login with code failed"}
