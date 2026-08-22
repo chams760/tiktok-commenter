@@ -82,7 +82,7 @@ async def api_stats(request):
         tasks = await db.get_all_tasks(limit=10)
         return web.json_response({
             "stats": stats,
-            "accounts": [{"id": a["id"], "username": a["username"], "status": a["status"], "comments_today": a["comments_today"]} for a in accounts],
+            "accounts": [{"id": a["id"], "username": a["username"], "status": a["status"], "comments_today": a["comments_today"], "proxy": a.get("proxy", "")} for a in accounts],
             "tasks": tasks,
         })
     except Exception as e:
@@ -122,7 +122,14 @@ async def api_upload_accounts(request):
         data = await request.json()
         raw = data.get("accounts", "")
         lines = [l.strip() for l in raw.splitlines() if ":" in l]
-        accounts = [(l.split(":", 1)[0].strip(), l.split(":", 1)[1].strip()) for l in lines]
+        accounts = []
+        for l in lines:
+            parts = l.split(":")
+            if len(parts) >= 2:
+                user = parts[0].strip()
+                passw = parts[1].strip()
+                proxy = ":".join(parts[2:]).strip() if len(parts) > 2 else ""
+                accounts.append((user, passw, proxy))
         if not accounts:
             return web.json_response({"error": "no valid accounts"}, status=400)
         await db.add_accounts(accounts)
@@ -159,19 +166,21 @@ async def api_test_login(request):
         from tiktok_worker import test_login
         data = await request.json()
         account_id = data.get("account_id")
+        proxy = data.get("proxy", "")
         if account_id:
             accounts = await db.get_accounts()
             acc = next((a for a in accounts if a["id"] == int(account_id)), None)
             if not acc:
                 return web.json_response({"error": "account not found"}, status=404)
             username, password = acc["username"], acc["password"]
+            proxy = acc.get("proxy", "") or proxy
         else:
             username = data.get("username", "").strip()
             password = data.get("password", "").strip()
         if not username or not password:
             return web.json_response({"error": "username and password required"}, status=400)
-        steps = await test_login(username, password)
-        return web.json_response({"ok": True, "steps": steps, "username": username})
+        steps = await test_login(username, password, proxy)
+        return web.json_response({"ok": True, "steps": steps, "username": username, "proxy": bool(proxy)})
     except Exception as e:
         logger.error(f"Test login error: {e}")
         return web.json_response({"error": str(e)}, status=500)
@@ -395,13 +404,20 @@ async def start_bot():
         accounts = []
         for line in lines:
             if ":" in line:
-                p = line.split(":", 1)
-                accounts.append((p[0].strip(), p[1].strip()))
+                parts = line.split(":")
+                user = parts[0].strip()
+                passw = parts[1].strip()
+                proxy = ":".join(parts[2:]).strip() if len(parts) > 2 else ""
+                accounts.append((user, passw, proxy))
         if not accounts:
-            await msg.answer("Не удалось распарсить аккаунты. Формат: login:password")
+            await msg.answer("Не удалось распарсить аккаунты.\nФормат: login:password или login:password:proxy")
             return
+        with_proxy = sum(1 for a in accounts if a[2])
         await db.add_accounts(accounts)
-        await msg.answer(f"Загружено аккаунтов: {len(accounts)}")
+        text = f"Загружено аккаунтов: {len(accounts)}"
+        if with_proxy:
+            text += f"\nС прокси: {with_proxy}"
+        await msg.answer(text)
 
     @dp.callback_query(F.data == "stats")
     async def cb_stats(cb: types.CallbackQuery):

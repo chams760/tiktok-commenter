@@ -308,8 +308,9 @@
     </div>
 
     <div class="section-label">Upload accounts</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:8px;">Format: login:password or login:password:proxy</div>
     <div class="field">
-        <textarea id="accounts-input" rows="5" placeholder="login:password&#10;login2:password2"></textarea>
+        <textarea id="accounts-input" rows="5" placeholder="user@mail.com:pass123&#10;user2@mail.com:pass456:http://proxy:8080&#10;user3@mail.com:pass789:user:pass@proxy:8080"></textarea>
     </div>
     <button class="btn btn-primary" id="btn-upload" onclick="uploadAccounts()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -378,8 +379,11 @@
         <div class="field" style="margin-bottom:8px;">
             <input type="text" id="test-user" placeholder="login / email">
         </div>
-        <div class="field" style="margin-bottom:0;">
+        <div class="field" style="margin-bottom:8px;">
             <input type="text" id="test-pass" placeholder="password">
+        </div>
+        <div class="field" style="margin-bottom:0;">
+            <input type="text" id="test-proxy" placeholder="proxy (optional) — http://ip:port or user:pass@ip:port">
         </div>
     </div>
     <button class="btn btn-primary" id="btn-test" onclick="testLogin()">
@@ -500,8 +504,9 @@ function renderAccounts(accounts) {
     list.style.display = 'block';
     list.innerHTML = accounts.map(a => {
         const cls = a.status === 'active' ? 'badge-ok' : 'badge-err';
+        const proxyTag = a.proxy ? `<span class="badge badge-warn" style="font-size:10px;padding:2px 6px;margin-left:6px;" title="${esc(a.proxy)}">proxy</span>` : '';
         return `<div class="acc-item">
-            <div><div class="acc-name">${esc(a.username)}</div><div class="acc-meta">${a.comments_today} comments today</div></div>
+            <div><div class="acc-name">${esc(a.username)}${proxyTag}</div><div class="acc-meta">${a.comments_today} comments today</div></div>
             <span class="badge ${cls}">${a.status}</span>
         </div>`;
     }).join('');
@@ -643,12 +648,13 @@ async function loadAccountPicker() {
         return;
     }
     el.innerHTML = '<div class="field-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg> Pick an account</div>' +
-        data.accounts.map(a =>
-            `<div class="acc-item" style="cursor:pointer;" onclick="pickAccount(${a.id},'${esc(a.username)}')">
-                <div><div class="acc-name">${esc(a.username)}</div><div class="acc-meta">status: ${a.status}</div></div>
+        data.accounts.map(a => {
+            const proxyTag = a.proxy ? `<span class="badge badge-warn" style="font-size:10px;padding:2px 6px;margin-left:6px;">proxy</span>` : '';
+            return `<div class="acc-item" style="cursor:pointer;" onclick="pickAccount(${a.id},'${esc(a.username)}')">
+                <div><div class="acc-name">${esc(a.username)}${proxyTag}</div><div class="acc-meta">status: ${a.status}</div></div>
                 <span class="badge ${a.status==='active'?'badge-ok':'badge-err'}">${a.status}</span>
-            </div>`
-        ).join('');
+            </div>`;
+        }).join('');
 }
 
 function pickAccount(id, name) {
@@ -665,11 +671,13 @@ async function testLogin() {
     const results = document.getElementById('test-results');
     const manualUser = document.getElementById('test-user').value.trim();
     const manualPass = document.getElementById('test-pass').value.trim();
+    const manualProxy = document.getElementById('test-proxy').value.trim();
     const accountId = document.getElementById('test-user').dataset.accountId;
 
     let body = {};
     if (manualUser && manualPass) {
         body = { username: manualUser, password: manualPass };
+        if (manualProxy) body.proxy = manualProxy;
     } else if (accountId) {
         body = { account_id: parseInt(accountId) };
     } else {

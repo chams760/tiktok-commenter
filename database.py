@@ -10,6 +10,7 @@ async def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL,
                 password TEXT NOT NULL,
+                proxy TEXT DEFAULT '',
                 session_data TEXT DEFAULT '',
                 comments_today INTEGER DEFAULT 0,
                 last_reset TEXT DEFAULT '',
@@ -39,15 +40,25 @@ async def init_db():
                 created_at TEXT DEFAULT ''
             );
         """)
+        try:
+            await db.execute("ALTER TABLE accounts ADD COLUMN proxy TEXT DEFAULT ''")
+        except Exception:
+            pass
         await db.commit()
 
 
-async def add_accounts(accounts: list[tuple[str, str]]) -> int:
+async def add_accounts(accounts: list[tuple]) -> int:
     now = datetime.now(timezone.utc).isoformat()
+    rows = []
+    for t in accounts:
+        u = t[0]
+        p = t[1]
+        pr = t[2] if len(t) > 2 else ""
+        rows.append((u, p, pr, now, now))
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executemany(
-            "INSERT INTO accounts (username, password, added_at, last_reset) VALUES (?, ?, ?, ?)",
-            [(u, p, now, now) for u, p in accounts],
+            "INSERT INTO accounts (username, password, proxy, added_at, last_reset) VALUES (?, ?, ?, ?, ?)",
+            rows,
         )
         await db.commit()
         cursor = await db.execute("SELECT changes()")

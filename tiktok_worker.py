@@ -14,6 +14,30 @@ os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 
 _active_pages: dict[int, Page] = {}
 
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+
+def parse_proxy(proxy_str: str) -> dict | None:
+    if not proxy_str or not proxy_str.strip():
+        return None
+    p = proxy_str.strip()
+    if not p.startswith("http"):
+        p = "http://" + p
+    parts = p.replace("http://", "").replace("https://", "").replace("socks5://", "")
+    scheme = "socks5" if "socks5" in proxy_str else "http"
+    username = password = None
+    if "@" in parts:
+        auth, hostport = parts.rsplit("@", 1)
+        if ":" in auth:
+            username, password = auth.split(":", 1)
+    else:
+        hostport = parts
+    result = {"server": f"{scheme}://{hostport}"}
+    if username:
+        result["username"] = username
+        result["password"] = password
+    return result
+
 
 def get_active_page(task_id: int) -> Page | None:
     return _active_pages.get(task_id)
@@ -42,9 +66,10 @@ async def take_debug_screenshot(task_id: int | None = None) -> str | None:
     return None
 
 
-async def test_login(username: str, password: str) -> list[dict]:
+async def test_login(username: str, password: str, proxy: str = "") -> list[dict]:
     steps = []
     ts = int(datetime.now(timezone.utc).timestamp())
+    proxy_config = parse_proxy(proxy)
 
     async def snap(page: Page, step_name: str, note: str = ""):
         fname = f"test_{ts}_{len(steps)}_{step_name}.png"
@@ -53,14 +78,17 @@ async def test_login(username: str, password: str) -> list[dict]:
             await page.screenshot(path=path, full_page=False)
         except Exception:
             pass
-        steps.append({"step": step_name, "file": fname, "note": note, "url": page.url})
+        info = note
+        if proxy_config and step_name == "login_page":
+            info += f" | Proxy: {proxy_config['server']}"
+        steps.append({"step": step_name, "file": fname, "note": info, "url": page.url})
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
-        ctx = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            viewport={"width": 1920, "height": 1080},
-        )
+        launch_opts = {"headless": True}
+        if proxy_config:
+            launch_opts["proxy"] = proxy_config
+        browser = await pw.chromium.launch(**launch_opts)
+        ctx = await browser.new_context(user_agent=UA, viewport={"width": 1920, "height": 1080})
         page = await ctx.new_page()
 
         try:
@@ -215,19 +243,16 @@ async def run_task(task_id: int):
     logger.info(f"Запуск задачи #{task_id}: запрос='{task['search_query']}', лимит={task['max_comments']}")
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
         comments_done = task["comments_done"]
         comments_failed = task["comments_failed"]
 
         try:
-            video_urls = []
-            probe_ctx = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                viewport={"width": 1920, "height": 1080},
-            )
+            browser = await pw.chromium.launch(headless=True)
+            probe_ctx = await browser.new_context(user_agent=UA, viewport={"width": 1920, "height": 1080})
             probe_page = await probe_ctx.new_page()
             video_urls = await search_videos(probe_page, task["search_query"], task["max_comments"])
             await probe_ctx.close()
+            await browser.close()
 
             if not video_urls:
                 logger.warning("Видео не найдены")
@@ -249,10 +274,14 @@ async def run_task(task_id: int):
                     await db.update_task(task_id, status="paused_no_accounts")
                     return
 
-                ctx = await browser.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                    viewport={"width": 1920, "height": 1080},
-                )
+                proxy_config = parse_proxy(account.get("proxy", ""))
+                launch_opts = {"headless": True}
+                if proxy_config:
+                    launch_opts["proxy"] = proxy_config
+                    logger.info(f"Используется прокси: {proxy_config['server']} для {account['username']}")
+
+                browser = await pw.chromium.launch(**launch_opts)
+                ctx = await browser.new_context(user_agent=UA, viewport={"width": 1920, "height": 1080})
                 page = await ctx.new_page()
 
                 _active_pages[task_id] = page
@@ -293,6 +322,7 @@ async def run_task(task_id: int):
 
                 _active_pages.pop(task_id, None)
                 await ctx.close()
+                await browser.close()
 
                 delay = random.uniform(config.DELAY_MIN, config.DELAY_MAX)
                 logger.info(f"Задержка {delay:.0f}с перед следующим комментарием")
@@ -302,7 +332,6 @@ async def run_task(task_id: int):
             logger.error(f"Критическая ошибка задачи #{task_id}: {e}")
         finally:
             _active_pages.pop(task_id, None)
-            await browser.close()
             await db.update_task(
                 task_id,
                 status="done",
