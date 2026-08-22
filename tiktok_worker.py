@@ -856,12 +856,49 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
 
         # Step 2: Go to login page
         driver.get("https://www.tiktok.com/login/phone-or-email/email")
-        time.sleep(3)
+        time.sleep(5)
         _dismiss_cookie_banner(driver)
-        time.sleep(1)
+        time.sleep(2)
         _dismiss_cookie_banner(driver)
+
+        # Check if page rendered (SPA might need time)
+        page_src_len = len(driver.page_source or "")
+        body_text = ""
+        try:
+            body_text = driver.find_element(By.TAG_NAME, "body").text
+        except Exception:
+            pass
+
+        if not body_text.strip() and page_src_len < 5000:
+            step("empty_page", f"Page empty (src={page_src_len}b), waiting 10s for SPA render...")
+            time.sleep(10)
+            try:
+                body_text = driver.find_element(By.TAG_NAME, "body").text
+            except Exception:
+                pass
+            page_src_len = len(driver.page_source or "")
+
+        if not body_text.strip() and page_src_len < 5000:
+            step("still_empty", f"Still empty after wait. Reloading page...")
+            driver.refresh()
+            time.sleep(8)
+            _dismiss_cookie_banner(driver)
+            try:
+                body_text = driver.find_element(By.TAG_NAME, "body").text
+            except Exception:
+                pass
+            page_src_len = len(driver.page_source or "")
+
         snap(driver, "login_page")
-        step("login_page", "Login page loaded")
+        step("login_page", f"Login page | body_len={len(body_text)} | src_len={page_src_len}")
+
+        # Save page source for debugging
+        try:
+            html_path = os.path.join(SCREENSHOTS_DIR, f"login_{ts}_page.html")
+            with open(html_path, "w", encoding="utf-8") as hf:
+                hf.write(driver.page_source)
+        except Exception:
+            pass
 
         # Step 3: Fill credentials
         email_input = None
@@ -874,7 +911,7 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             'input[type="email"]',
         ]:
             try:
-                email_input = WebDriverWait(driver, 5).until(
+                email_input = WebDriverWait(driver, 8).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, selector))
                 )
                 if email_input:
@@ -884,15 +921,26 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                 continue
 
         if not email_input:
-            body_text = ""
+            # Try via JavaScript as last resort
             try:
-                body_text = driver.find_element(By.TAG_NAME, "body").text[:500]
+                email_input_js = driver.execute_script("""
+                    var inputs = document.querySelectorAll('input');
+                    for (var i = 0; i < inputs.length; i++) {
+                        var inp = inputs[i];
+                        if (inp.type === 'hidden') continue;
+                        if (inp.offsetHeight === 0) continue;
+                        return {tag: inp.tagName, name: inp.name, type: inp.type, placeholder: inp.placeholder};
+                    }
+                    return null;
+                """)
+                step("js_input_scan", f"JS found: {email_input_js}")
             except Exception:
                 pass
+
             snap(driver, "no_email_input")
-            step("error", f"Email input not found. URL: {driver.current_url} | Body: {body_text}")
+            step("error", f"Email input not found. URL: {driver.current_url} | Body: {body_text[:300]} | SrcLen: {page_src_len}")
             driver.quit()
-            return {"ok": False, "steps": steps, "error": f"Email input not found. Page: {body_text[:200]}"}
+            return {"ok": False, "steps": steps, "error": f"Email input not found. Body({len(body_text)}): {body_text[:200]}"}
 
         ActionChains(driver).move_to_element(email_input).click().perform()
         _human_delay(0.2, 0.4)
