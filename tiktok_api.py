@@ -31,6 +31,8 @@ IMAP_SERVERS = {
     "rambler.ru": "imap.rambler.ru",
     "gmx.com": "imap.gmx.com",
     "zoho.com": "imap.zoho.com",
+    "firstmail.ltd": "imap.firstmail.ltd",
+    "bumblespf.com": "imap.firstmail.ltd",
 }
 
 
