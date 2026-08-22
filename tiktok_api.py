@@ -106,12 +106,18 @@ def _save_api_cookies(session, username: str):
     path = os.path.join(SESSIONS_DIR, f"{safe}.json")
     cookies = []
     jar = session.cookies
-    for c in jar:
+    try:
+        cookie_dict = dict(jar.items())
+    except Exception:
+        cookie_dict = {}
+        for name in jar:
+            cookie_dict[name if isinstance(name, str) else name.name] = jar.get(name if isinstance(name, str) else name.name, "")
+    for name, value in cookie_dict.items():
         cookies.append({
-            "name": c.name,
-            "value": c.value,
-            "domain": getattr(c, "domain", ".tiktok.com") or ".tiktok.com",
-            "path": getattr(c, "path", "/") or "/",
+            "name": name,
+            "value": value,
+            "domain": ".tiktok.com",
+            "path": "/",
         })
     with open(path, "w") as f:
         json.dump(cookies, f)
@@ -187,10 +193,7 @@ _pending_api_sessions: dict[str, dict] = {}
 
 
 def _get_csrf(session) -> str:
-    for c in session.cookies:
-        if c.name == "tt_csrf_token":
-            return c.value
-    return ""
+    return session.cookies.get("tt_csrf_token", "")
 
 
 def _post_api(session, url: str, data: dict, step_fn, step_name: str) -> dict | None:
