@@ -285,7 +285,11 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
         parsed = _parse_proxy_parts(proxy_str)
         if parsed:
             host, port, user, passw = parsed
-            options.add_argument(f"--proxy-server=http://{host}:{port}")
+            if user and passw:
+                ext_dir = _make_proxy_auth_extension_dir(host, port, user, passw)
+                options.add_argument(f"--load-extension={ext_dir}")
+            else:
+                options.add_argument(f"--proxy-server=http://{host}:{port}")
 
     chrome_binary = None
     for path in ["/usr/bin/google-chrome-stable", "/usr/bin/google-chrome", "/usr/bin/chromium"]:
@@ -845,10 +849,16 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         # Step 0: Verify proxy connectivity
         if proxy:
             try:
-                driver.get("https://api.ipify.org?format=json")
-                time.sleep(3)
-                ip_text = driver.find_element(By.TAG_NAME, "body").text
-                step("proxy_check", f"Proxy OK. IP: {ip_text}")
+                driver.get("https://httpbin.org/ip")
+                time.sleep(5)
+                ip_text = driver.find_element(By.TAG_NAME, "body").text.strip()
+                page_len = len(driver.page_source or "")
+                if not ip_text or page_len < 50:
+                    snap(driver, "proxy_fail")
+                    step("proxy_fail", f"Proxy returned empty page (src={page_len}b). Auth may have failed.")
+                    driver.quit()
+                    return {"ok": False, "steps": steps, "error": "Proxy auth failed — empty response. Check proxy credentials."}
+                step("proxy_check", f"Proxy OK. Response: {ip_text[:100]}")
             except Exception as e:
                 snap(driver, "proxy_fail")
                 step("proxy_fail", f"Proxy connection failed: {e}")
