@@ -756,14 +756,18 @@ async function testLogin() {
                     </div>`;
                 }).join('');
             const lastStep = data.steps[data.steps.length - 1];
-            if (lastStep.note && lastStep.note.includes('WAITING_FOR_CODE')) {
+            const needsCode = data.steps.some(s => s.note && (s.note.includes('WAITING_FOR_CODE') || s.note.includes('COULD_NOT_CLICK_EMAIL')));
+            if (needsCode || (lastStep.note && lastStep.note.includes('WAITING_FOR_CODE'))) {
                 const verifyUser = data.username || manualUser || '';
                 results.innerHTML += `
                 <div class="card" style="border-color:var(--yellow);margin-top:12px;">
-                    <div style="font-size:14px;font-weight:600;color:var(--yellow);margin-bottom:8px;">Email verification required</div>
-                    <div style="font-size:13px;color:var(--text-2);margin-bottom:12px;">TikTok sent a verification code to your email. Enter it below:</div>
+                    <div style="font-size:14px;font-weight:600;color:var(--yellow);margin-bottom:8px;">Verification required</div>
+                    <div style="font-size:13px;color:var(--text-2);margin-bottom:12px;">
+                        TikTok requires email verification.<br>
+                        <strong>If code didn't arrive:</strong> log in to TikTok on your phone, request verification there, enter the code below — it will work for both sessions.
+                    </div>
                     <div class="field" style="margin-bottom:10px;">
-                        <input type="text" id="verify-code" placeholder="Enter 6-digit code" maxlength="10" style="text-align:center;font-size:20px;letter-spacing:6px;font-weight:700;">
+                        <input type="text" id="verify-code" placeholder="Enter code" maxlength="10" style="text-align:center;font-size:20px;letter-spacing:6px;font-weight:700;">
                     </div>
                     <input type="hidden" id="verify-username" value="${esc(verifyUser)}">
                     <button class="btn btn-primary" id="btn-verify" onclick="submitVerifyCode()">
@@ -771,7 +775,7 @@ async function testLogin() {
                         Verify
                     </button>
                 </div>`;
-                toast('Check your email for the code', 'success');
+                toast('Verification needed — check email or use phone', 'success');
             } else if (lastStep.note && lastStep.note.includes('SUCCESS')) {
                 toast('Login successful!', 'success');
             } else {

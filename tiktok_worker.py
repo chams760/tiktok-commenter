@@ -442,8 +442,10 @@ def _test_login_sync(username: str, password: str, proxy: str = "") -> list[dict
                 steps[-1]["note"] = "COULD_NOT_CLICK_EMAIL - check verify_*_page.html in screenshots for page structure"
                 return steps
 
-            _human_delay(2, 3)
+            _human_delay(3, 5)
+            snap(driver, "after_email_click", f"After email click. URL: {driver.current_url}")
             new_body = driver.find_element(By.TAG_NAME, "body").text
+
             if new_body == body_text:
                 snap(driver, "verify_click_no_change", "Page didn't change after click, trying parent element...")
                 driver.execute_script("""
@@ -459,8 +461,28 @@ def _test_login_sync(username: str, password: str, proxy: str = "") -> list[dict
                         }
                     }
                 """)
-                _human_delay(2, 4)
+                _human_delay(3, 5)
                 snap(driver, "verify_parent_clicked", "Tried clicking parent element")
+                new_body = driver.find_element(By.TAG_NAME, "body").text
+
+            try:
+                send_btns = driver.execute_script("""
+                    var btns = document.querySelectorAll('button, div[role="button"], a[role="button"], [class*="send"], [class*="Send"]');
+                    var results = [];
+                    for (var i = 0; i < btns.length; i++) {
+                        var t = (btns[i].innerText || '').trim().toLowerCase();
+                        if (t.match(/send|отправить|get.*code|получить|request/i) && btns[i].offsetHeight > 0) {
+                            results.push(t);
+                            btns[i].click();
+                            return 'clicked: ' + t;
+                        }
+                    }
+                    return 'no send button found. Buttons: ' + results.join(', ');
+                """)
+                snap(driver, "send_code_btn", f"Send code button: {send_btns}")
+                _human_delay(2, 3)
+            except Exception:
+                pass
 
             _pending_verification[username] = {"driver": driver, "steps": steps, "snap": snap}
             steps[-1]["note"] = "WAITING_FOR_CODE - Enter the verification code sent to your email"
