@@ -366,6 +366,26 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
         Save
     </button>
+
+    <div class="section-label" style="margin-top:24px;">Cookie import</div>
+    <div class="card" style="margin-bottom:12px;">
+        <div style="font-size:13px;color:var(--text-2);margin-bottom:12px;">
+            Import cookies from browser extension (EditThisCookie, Cookie-Editor). Export as JSON and paste below.
+        </div>
+        <div class="field" style="margin-bottom:8px;">
+            <input type="text" id="cookie-username" placeholder="TikTok username">
+        </div>
+        <div class="field" style="margin-bottom:8px;">
+            <input type="text" id="cookie-proxy" placeholder="Proxy (optional) — login:pass:host:port">
+        </div>
+        <div class="field" style="margin-bottom:0;">
+            <textarea id="cookie-json" rows="5" placeholder='[{"name":"sessionid","value":"...","domain":".tiktok.com"}, ...]' style="width:100%;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:10px;font-family:monospace;font-size:12px;resize:vertical;"></textarea>
+        </div>
+    </div>
+    <button class="btn btn-secondary" id="btn-import-cookies" onclick="importCookies()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Import Cookies
+    </button>
 </div>
 
 <!-- ── Debug ── -->
@@ -487,6 +507,7 @@ function showTab(name, el) {
     if (name === 'dashboard') loadStats();
     if (name === 'debug') { loadAccountPicker(); loadApiLoginPicker(); }
     if (name === 'accounts') loadStats();
+    if (name === 'settings') loadSettings();
 }
 
 function toast(text, type) {
@@ -631,14 +652,27 @@ function loadFile(event) {
     reader.readAsText(file);
 }
 
-function saveSettings() {
-    tg.sendData(JSON.stringify({
-        action: 'save_settings',
-        max_per_day: document.getElementById('max-per-day').value,
-        delay_min: document.getElementById('delay-min').value,
-        delay_max: document.getElementById('delay-max').value
-    }));
-    toast('Settings saved', 'success');
+async function saveSettings() {
+    const btn = event.currentTarget;
+    btn.disabled = true;
+    const res = await api('POST', '/api/settings', {
+        max_comments_per_account: parseInt(document.getElementById('max-per-day').value),
+        delay_min: parseInt(document.getElementById('delay-min').value),
+        delay_max: parseInt(document.getElementById('delay-max').value)
+    });
+    btn.disabled = false;
+    if (res.ok) toast('Settings saved', 'success');
+    else toast(res.error || 'Error', 'error');
+}
+
+async function loadSettings() {
+    const res = await api('GET', '/api/settings');
+    if (res.delay_min !== undefined) {
+        document.getElementById('delay-min').value = res.delay_min;
+        document.getElementById('delay-max').value = res.delay_max;
+        document.getElementById('max-per-day').value = res.max_comments_per_account;
+        document.getElementById('mpd-val').textContent = res.max_comments_per_account;
+    }
 }
 
 async function loadApiLoginPicker() {
@@ -792,6 +826,7 @@ async function apiSubmitCode() {
 
 async function importCookies() {
     const username = document.getElementById('cookie-username').value.trim();
+    const proxy = document.getElementById('cookie-proxy').value.trim();
     const cookiesRaw = document.getElementById('cookie-json').value.trim();
     if (!username) { toast('Enter account username', 'error'); return; }
     if (!cookiesRaw) { toast('Paste cookies JSON', 'error'); return; }
@@ -799,11 +834,13 @@ async function importCookies() {
     try { cookies = JSON.parse(cookiesRaw); } catch(e) { toast('Invalid JSON', 'error'); return; }
     const btn = document.getElementById('btn-import-cookies');
     btn.disabled = true;
-    const res = await api('POST', '/api/import-cookies', { username, cookies });
+    const res = await api('POST', '/api/import-cookies', { username, cookies, proxy });
     btn.disabled = false;
     if (res.ok) {
-        toast(res.count + ' cookies imported for ' + res.username, 'success');
+        toast(res.count + ' cookies imported for ' + res.username + (res.account_added ? ' (added to dashboard)' : ''), 'success');
         document.getElementById('cookie-json').value = '';
+        document.getElementById('cookie-username').value = '';
+        document.getElementById('cookie-proxy').value = '';
     } else {
         toast(res.error || 'Error', 'error');
     }

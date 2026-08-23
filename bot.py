@@ -322,7 +322,16 @@ async def api_import_cookies(request):
         with open(path, "w") as f:
             _json.dump(pw_cookies, f)
 
-        return web.json_response({"ok": True, "count": len(pw_cookies), "username": username})
+        # Auto-add account to database
+        import database as db_mod
+        existing = await db_mod.get_accounts()
+        already_exists = any(a["username"] == username for a in existing)
+        if not already_exists:
+            proxy = data.get("proxy", "").strip()
+            await db_mod.add_accounts([(username, "", proxy, "", "")])
+            logger.info(f"Account {username} added via cookie import")
+
+        return web.json_response({"ok": True, "count": len(pw_cookies), "username": username, "account_added": not already_exists})
     except _json.JSONDecodeError:
         return web.json_response({"error": "Invalid JSON in cookies"}, status=400)
     except Exception as e:
@@ -406,6 +415,27 @@ async def api_error_image(request):
     return web.json_response({"error": "not found"}, status=404)
 
 
+async def api_settings(request):
+    import config as cfg
+    if request.method == "GET":
+        return web.json_response({
+            "delay_min": cfg.DELAY_MIN,
+            "delay_max": cfg.DELAY_MAX,
+            "max_comments_per_account": cfg.MAX_COMMENTS_PER_ACCOUNT,
+        })
+    try:
+        data = await request.json()
+        if "delay_min" in data:
+            cfg.DELAY_MIN = int(data["delay_min"])
+        if "delay_max" in data:
+            cfg.DELAY_MAX = int(data["delay_max"])
+        if "max_comments_per_account" in data:
+            cfg.MAX_COMMENTS_PER_ACCOUNT = int(data["max_comments_per_account"])
+        return web.json_response({"ok": True, "delay_min": cfg.DELAY_MIN, "delay_max": cfg.DELAY_MAX, "max_comments_per_account": cfg.MAX_COMMENTS_PER_ACCOUNT})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def start_health_server():
     app = web.Application()
     app.router.add_get("/", webapp_handler)
@@ -424,6 +454,8 @@ async def start_health_server():
     app.router.add_post("/api/import-cookies", api_import_cookies)
     app.router.add_post("/api/verify-code", api_verify_code)
     app.router.add_post("/api/login", api_login)
+    app.router.add_get("/api/settings", api_settings)
+    app.router.add_post("/api/settings", api_settings)
     app.router.add_post("/api/submit-code", api_submit_code)
     port = int(os.environ.get("PORT", 8080))
     runner = web.AppRunner(app)
