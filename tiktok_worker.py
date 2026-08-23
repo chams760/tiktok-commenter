@@ -1251,51 +1251,79 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         tab_result = "not_attempted"
         try:
             tab_result = driver.execute_script("""
-                var allEls = document.querySelectorAll('a, div[role="tab"], [class*="tab"], span, p, div, label');
-                // Priority 1: exact "Email / Username" or "Username" tab
+                // Helper: get ONLY this element's own text (not children's text)
+                function directText(el) {
+                    var text = '';
+                    for (var i = 0; i < el.childNodes.length; i++) {
+                        if (el.childNodes[i].nodeType === 3) text += el.childNodes[i].textContent;
+                    }
+                    return text.trim();
+                }
+
+                // Collect all visible link-like elements
+                var allEls = document.querySelectorAll('a, span, p, div[role="tab"], [class*="tab"] > *, label, li');
+                var candidates = [];
                 for (var i = 0; i < allEls.length; i++) {
                     var el = allEls[i];
-                    if (el.offsetHeight === 0) continue;
-                    var t = (el.innerText || el.textContent || '').trim();
-                    var tl = t.toLowerCase();
-                    if (tl === 'email / username' || tl === 'email/username'
-                        || tl === 'username' || tl === 'email or username') {
-                        el.click();
-                        return 'clicked_tab:' + t;
+                    if (el.offsetHeight === 0 || el.offsetWidth === 0) continue;
+                    var dt = directText(el).toLowerCase();
+                    var full = (el.innerText || '').trim().toLowerCase();
+                    // Use direct text if available, fall back to full innerText for leaf nodes
+                    var text = dt || full;
+                    if (!text) continue;
+                    candidates.push({el: el, text: text, full: full, tag: el.tagName});
+                }
+
+                // Priority 1: exact match on direct text
+                var exactMatches = ['email / username', 'email/username', 'username or email',
+                                    'email or username', 'username', 'log in with email or username'];
+                for (var j = 0; j < candidates.length; j++) {
+                    for (var k = 0; k < exactMatches.length; k++) {
+                        if (candidates[j].text === exactMatches[k]) {
+                            candidates[j].el.click();
+                            return 'clicked_exact:' + candidates[j].text;
+                        }
                     }
                 }
-                // Priority 2: contains "username" in short text
-                for (var j = 0; j < allEls.length; j++) {
-                    var el2 = allEls[j];
-                    if (el2.offsetHeight === 0) continue;
-                    var t2 = (el2.innerText || '').trim().toLowerCase();
-                    if (t2.includes('username') && t2.length < 40) {
-                        el2.click();
-                        return 'clicked_username:' + t2;
+
+                // Priority 2: direct text contains "username" but NOT "phone" (to avoid parent containers)
+                for (var m = 0; m < candidates.length; m++) {
+                    var t = candidates[m].text;
+                    if (t.includes('username') && !t.includes('phone') && t.length < 35) {
+                        candidates[m].el.click();
+                        return 'clicked_username:' + t;
                     }
                 }
-                // Priority 3: "email" tab
-                for (var k = 0; k < allEls.length; k++) {
-                    var el3 = allEls[k];
-                    if (el3.offsetHeight === 0) continue;
-                    var t3 = (el3.innerText || '').trim().toLowerCase();
-                    if ((t3 === 'email' || t3.match(/log.*in.*with.*email/i)) && t3.length < 40) {
-                        el3.click();
-                        return 'clicked_email:' + t3;
+
+                // Priority 3: element with ONLY "email" as text
+                for (var n = 0; n < candidates.length; n++) {
+                    if (candidates[n].text === 'email') {
+                        candidates[n].el.click();
+                        return 'clicked_email:' + candidates[n].text;
                     }
                 }
-                // List what tabs are visible for debugging
-                var found = [];
-                var tabEls = document.querySelectorAll('[class*="tab"], [role="tab"], [class*="channel"] a, [class*="login"] a');
-                for (var m = 0; m < tabEls.length; m++) {
-                    if (tabEls[m].offsetHeight > 0) found.push((tabEls[m].innerText || '').trim().substring(0, 30));
-                }
-                return 'not_found|tabs:' + found.join(',');
+
+                // Debug: list all candidate texts
+                var debug = candidates.map(function(c) { return c.tag + ':' + c.text.substring(0, 25); }).slice(0, 15);
+                return 'not_found|candidates:' + debug.join(' | ');
             """)
         except Exception as e:
             tab_result = f"error:{e}"
         step("tab_switch", f"Tab switch: {tab_result}")
         time.sleep(3)
+
+        # Verify we're on the right tab (should see password field or email placeholder)
+        tab_check = driver.execute_script("""
+            var inputs = document.querySelectorAll('input');
+            var visible = [];
+            for (var i = 0; i < inputs.length; i++) {
+                if (inputs[i].offsetHeight > 0 && inputs[i].type !== 'hidden') {
+                    visible.push({type: inputs[i].type, name: inputs[i].name, ph: inputs[i].placeholder});
+                }
+            }
+            return JSON.stringify(visible);
+        """)
+        step("tab_verify", f"Inputs after tab switch: {tab_check}")
 
         snap(driver, "login_page")
         page_src_len = len(driver.page_source or "")
@@ -1321,17 +1349,55 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             'input[placeholder*="username" i]',
             'input[placeholder*="email" i]',
             'input[type="email"]',
-            'input[type="text"]',
         ]:
             try:
-                email_input = WebDriverWait(driver, 8).until(
+                el = WebDriverWait(driver, 5).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, selector))
                 )
-                if email_input:
-                    step("input_found", f"Email input found via: {selector}")
+                if el and el.is_displayed():
+                    # Skip phone input
+                    name = el.get_attribute("name") or ""
+                    ph = el.get_attribute("placeholder") or ""
+                    if "mobile" in name or "phone" in name or "phone" in ph.lower():
+                        continue
+                    email_input = el
+                    step("input_found", f"Email input found via: {selector} (name={name}, ph={ph})")
                     break
             except Exception:
                 continue
+
+        # Fallback: find via JS, explicitly skip phone fields
+        if not email_input:
+            try:
+                email_input = driver.execute_script("""
+                    var inputs = document.querySelectorAll('input');
+                    for (var i = 0; i < inputs.length; i++) {
+                        var inp = inputs[i];
+                        if (inp.offsetHeight === 0 || inp.type === 'hidden' || inp.type === 'password') continue;
+                        var name = (inp.name || '').toLowerCase();
+                        var ph = (inp.placeholder || '').toLowerCase();
+                        // Skip phone/mobile fields
+                        if (name.includes('mobile') || name.includes('phone') || ph.includes('phone')) continue;
+                        // Prefer username/email fields
+                        if (name.includes('username') || name.includes('email') || ph.includes('username') || ph.includes('email')) {
+                            return inp;
+                        }
+                    }
+                    // Last resort: first non-phone text input
+                    for (var j = 0; j < inputs.length; j++) {
+                        var inp2 = inputs[j];
+                        if (inp2.offsetHeight === 0 || inp2.type === 'hidden' || inp2.type === 'password') continue;
+                        var n2 = (inp2.name || '').toLowerCase();
+                        var p2 = (inp2.placeholder || '').toLowerCase();
+                        if (n2.includes('mobile') || n2.includes('phone') || p2.includes('phone')) continue;
+                        return inp2;
+                    }
+                    return null;
+                """)
+                if email_input:
+                    step("input_found", "Email input found via JS (skipping phone fields)")
+            except Exception:
+                pass
 
         if not email_input:
             # Try via JavaScript as last resort
