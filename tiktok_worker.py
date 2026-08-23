@@ -1549,8 +1549,10 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         _random_mouse_move(driver, 1)
         ActionChains(driver).move_to_element(email_input).click().perform()
         _human_delay(0.5, 1.2)
+        # Clear field first, then type (don't use _react_set_value — conflicts with keyboard events)
+        email_input.clear()
+        _human_delay(0.1, 0.3)
         _human_type(email_input, username)
-        _react_set_value(driver, email_input, username)
         _human_delay(0.8, 1.5)
 
         def _find_pass_input():
@@ -1640,8 +1642,9 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         _random_mouse_move(driver, 1)
         ActionChains(driver).move_to_element(pass_input).click().perform()
         _human_delay(0.5, 1.0)
+        pass_input.clear()
+        _human_delay(0.1, 0.3)
         _human_type(pass_input, password)
-        _react_set_value(driver, pass_input, password)
         _human_delay(1.0, 2.0)
 
         # Verify both inputs have correct values in DOM
@@ -1694,32 +1697,58 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         """, login_btn)
         step("login_btn_state", f"Button: {json.dumps(btn_disabled)}")
 
-        # Click with multiple methods for reliability
-        # Method 1: Enter key from password field
-        try:
-            from selenium.webdriver.common.keys import Keys
-            pass_input.send_keys(Keys.ENTER)
-        except Exception:
-            pass
-        _human_delay(0.5, 0.8)
-
-        # Method 2: ActionChains click
-        try:
-            ActionChains(driver).move_to_element(login_btn).click().perform()
-        except Exception:
-            pass
-        _human_delay(0.3, 0.5)
-
-        # Method 3: JS click + native event dispatch (bypasses any overlay)
+        # Intercept XHR/fetch to monitor login API calls
         driver.execute_script("""
-            var btn = arguments[0];
-            btn.focus();
-            btn.click();
-            btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
-        """, login_btn)
+            window.__loginRequests = [];
+            // Intercept XMLHttpRequest
+            var origOpen = XMLHttpRequest.prototype.open;
+            var origSend = XMLHttpRequest.prototype.send;
+            XMLHttpRequest.prototype.open = function(method, url) {
+                this.__url = url; this.__method = method;
+                return origOpen.apply(this, arguments);
+            };
+            XMLHttpRequest.prototype.send = function(body) {
+                var self = this;
+                if (self.__url && (self.__url.includes('login') || self.__url.includes('passport'))) {
+                    window.__loginRequests.push({type:'xhr', method: self.__method, url: self.__url, time: Date.now()});
+                    self.addEventListener('load', function() {
+                        window.__loginRequests.push({type:'xhr_resp', status: self.status, url: self.__url,
+                            resp: (self.responseText||'').substring(0, 500)});
+                    });
+                }
+                return origSend.apply(this, arguments);
+            };
+            // Intercept fetch
+            var origFetch = window.fetch;
+            window.fetch = function(url, opts) {
+                var urlStr = typeof url === 'string' ? url : (url.url || '');
+                if (urlStr.includes('login') || urlStr.includes('passport')) {
+                    window.__loginRequests.push({type:'fetch', method: (opts||{}).method||'GET', url: urlStr, time: Date.now()});
+                }
+                return origFetch.apply(this, arguments).then(function(resp) {
+                    if (urlStr.includes('login') || urlStr.includes('passport')) {
+                        resp.clone().text().then(function(t) {
+                            window.__loginRequests.push({type:'fetch_resp', status: resp.status, url: urlStr, resp: t.substring(0, 500)});
+                        });
+                    }
+                    return resp;
+                });
+            };
+        """)
 
+        # Click login button — only use ActionChains (most natural, single click)
+        ActionChains(driver).move_to_element(login_btn).click().perform()
+
+        # Wait for login API response
         time.sleep(8)
         snap(driver, "after_login_click")
+
+        # Check intercepted login API calls
+        try:
+            login_reqs = driver.execute_script("return JSON.stringify(window.__loginRequests || []);")
+            step("login_api", f"API calls: {login_reqs[:500]}")
+        except Exception:
+            step("login_api", "Could not read intercepted requests")
 
         # Check modal for errors BEFORE navigating away
         modal_text = driver.execute_script("""
@@ -1760,6 +1789,55 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             modal_data = json.loads(modal_text)
         except Exception:
             modal_data = {}
+
+        # Check for verification/challenge screens that may have appeared
+        post_login_state = driver.execute_script("""
+            var state = {url: location.href, hasCodeInput: false, hasVerifyText: false,
+                         newModals: [], iframes: [], allDialogs: []};
+            // Check for verification code input fields
+            var inputs = document.querySelectorAll('input');
+            var codeInputs = 0;
+            for (var i = 0; i < inputs.length; i++) {
+                var inp = inputs[i];
+                if (inp.offsetHeight === 0) continue;
+                var ph = (inp.placeholder || '').toLowerCase();
+                var name = (inp.name || '').toLowerCase();
+                var type = inp.type;
+                if (ph.includes('code') || ph.includes('verify') || name.includes('code')
+                    || (type === 'tel' && inp.maxLength <= 6)) {
+                    codeInputs++;
+                }
+            }
+            if (codeInputs > 0) state.hasCodeInput = true;
+            // Check for verification text
+            var bodyText = (document.body.innerText || '').toLowerCase();
+            if (bodyText.includes('verification') || bodyText.includes('verify your')
+                || bodyText.includes('enter the code') || bodyText.includes('sent a code')
+                || bodyText.includes('enter code') || bodyText.includes('confirm your')) {
+                state.hasVerifyText = true;
+            }
+            // Check all visible dialogs/modals
+            var dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="overlay"]');
+            for (var j = 0; j < dialogs.length; j++) {
+                if (dialogs[j].offsetHeight > 0) {
+                    state.allDialogs.push((dialogs[j].innerText || '').substring(0, 200));
+                }
+            }
+            // Check iframes (captcha/verification often in iframe)
+            var iframes = document.querySelectorAll('iframe');
+            for (var k = 0; k < iframes.length; k++) {
+                if (iframes[k].offsetHeight > 0 && iframes[k].src) {
+                    state.iframes.push(iframes[k].src.substring(0, 100));
+                }
+            }
+            return state;
+        """)
+        step("post_login_state", f"State: {json.dumps(post_login_state)[:500]}")
+
+        # If verification is needed, handle it
+        if post_login_state.get("hasCodeInput") or post_login_state.get("hasVerifyText"):
+            step("verify_detected", "Verification/challenge detected after login click!")
+            snap(driver, "verify_after_login")
 
         # Check for REAL captcha UI (not just word in JS code)
         has_captcha = driver.execute_script("""
