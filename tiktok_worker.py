@@ -3527,61 +3527,111 @@ def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: s
             logger.warning(f"No comment input found. Editables: {diag}")
             return False, "no_comment_input"
 
-        # Click on comment box to focus
+        # Step 4: Click comment box and type via active element
+        # Click with ActionChains to properly activate Draft.js
         try:
             ActionChains(driver).move_to_element(comment_box).click().perform()
         except Exception:
             driver.execute_script("arguments[0].click()", comment_box)
-        _human_delay(0.5, 1.0)
+        _human_delay(1, 1.5)
 
-        # Re-find after click (React may re-render)
+        # Re-find after click (React/Draft.js may re-render the editor)
         comment_box = _find_comment_input() or comment_box
 
-        # Step 4: Type comment using real keyboard events (React needs these)
-        # Clear any existing text first
-        driver.execute_script("""
-            var el = arguments[0];
-            el.focus();
-            el.textContent = '';
-            el.innerHTML = '';
-        """, comment_box)
-        _human_delay(0.3, 0.5)
-
-        # Type character by character via ActionChains (real keyboard events)
+        # Click again to make sure Draft.js editor is focused
         try:
             ActionChains(driver).move_to_element(comment_box).click().perform()
-            _human_delay(0.3, 0.5)
-            for ch in comment_text:
-                ActionChains(driver).send_keys(ch).perform()
-                _human_delay(0.03, 0.1)
-        except Exception as type_err:
-            logger.warning(f"ActionChains typing failed: {type_err}, trying send_keys")
-            try:
-                comment_box.send_keys(comment_text)
-            except Exception:
-                pass
-        _human_delay(1, 2)
+        except Exception:
+            pass
+        _human_delay(0.5, 0.8)
 
-        # Verify text was entered
-        entered = driver.execute_script("return (arguments[0].textContent || arguments[0].innerText || '').trim()", comment_box)
-        if not entered:
-            # Last resort: execCommand
-            driver.execute_script("""
+        # Type using the active element (whatever has focus after clicking)
+        entered = ""
+        for attempt in range(3):
+            if attempt > 0:
+                # Re-click to refocus
+                try:
+                    comment_box = _find_comment_input() or comment_box
+                    ActionChains(driver).move_to_element(comment_box).click().perform()
+                except Exception:
+                    pass
+                _human_delay(0.5, 1)
+
+            if attempt == 0:
+                # Method 1: send_keys to active element (best for Draft.js)
+                try:
+                    active = driver.switch_to.active_element
+                    active.send_keys(comment_text)
+                    logger.info("Typed via active_element.send_keys")
+                except Exception as e:
+                    logger.warning(f"active_element.send_keys failed: {e}")
+
+            elif attempt == 1:
+                # Method 2: ActionChains char by char
+                try:
+                    for ch in comment_text:
+                        ActionChains(driver).send_keys(ch).perform()
+                        _human_delay(0.03, 0.08)
+                    logger.info("Typed via ActionChains char-by-char")
+                except Exception as e:
+                    logger.warning(f"ActionChains typing failed: {e}")
+
+            elif attempt == 2:
+                # Method 3: execCommand as last resort
+                try:
+                    driver.execute_script("""
+                        var el = arguments[0];
+                        el.focus();
+                        document.execCommand('selectAll', false, null);
+                        document.execCommand('delete', false, null);
+                        document.execCommand('insertText', false, arguments[1]);
+                        el.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: arguments[1]}));
+                    """, comment_box, comment_text)
+                    logger.info("Typed via execCommand + InputEvent")
+                except Exception as e:
+                    logger.warning(f"execCommand failed: {e}")
+
+            _human_delay(1, 1.5)
+
+            # Check if text appeared AND placeholder disappeared
+            check = driver.execute_script("""
                 var el = arguments[0];
-                el.focus();
-                document.execCommand('selectAll', false, null);
-                document.execCommand('insertText', false, arguments[1]);
-            """, comment_box, comment_text)
-            _human_delay(0.5, 1)
-            entered = driver.execute_script("return (arguments[0].textContent || '').trim()", comment_box)
-            if not entered:
-                snap(driver, "comment_text_empty")
-                return False, "text_entry_failed"
+                var text = (el.textContent || el.innerText || '').trim();
+                // Check if Post button is enabled
+                var postBtn = document.querySelector('[data-e2e="comment-post"]');
+                var postEnabled = false;
+                if (postBtn) {
+                    var style = window.getComputedStyle(postBtn);
+                    postEnabled = style.opacity !== '0.5' && style.pointerEvents !== 'none'
+                                  && !postBtn.disabled && style.cursor !== 'not-allowed';
+                }
+                if (!postBtn) {
+                    // Check for any Post button
+                    var allBtns = document.querySelectorAll('button, div[role="button"]');
+                    for (var i = 0; i < allBtns.length; i++) {
+                        var t = (allBtns[i].innerText || '').trim().toLowerCase();
+                        if (t === 'post' && allBtns[i].offsetHeight > 0) {
+                            postEnabled = true;
+                            break;
+                        }
+                    }
+                }
+                return {text: text, postEnabled: postEnabled, hasPlaceholder: el.getAttribute('data-placeholder') ? true : false};
+            """)
+            entered = check.get("text", "")
+            post_enabled = check.get("postEnabled", False)
+            logger.info(f"Attempt {attempt+1}: text='{entered[:50]}', postEnabled={post_enabled}")
+
+            if entered and post_enabled:
+                break
+            if entered and attempt >= 1:
+                break
+
+        if not entered:
+            snap(driver, "comment_text_empty")
+            return False, "text_entry_failed"
 
         logger.info(f"Comment text entered: '{entered[:50]}'")
-
-        # Wait a moment for React to enable the Post button
-        _human_delay(1, 2)
 
         # Step 5: Click post button
         post_result = driver.execute_script("""
