@@ -2038,25 +2038,54 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                     for (var d = 0; d < dialogs.length; d++) {
                         var dt = (dialogs[d].innerText || '').toLowerCase();
                         if (dt.indexOf('verify') < 0 || dialogs[d].offsetHeight === 0) continue;
-                        var children = dialogs[d].getElementsByTagName('div');
+                        var children = dialogs[d].getElementsByTagName('*');
                         for (var i = 0; i < children.length; i++) {
                             var el = children[i];
                             if (el.offsetHeight === 0) continue;
                             var t = (el.innerText || '').trim();
+                            // Find element with masked email (has @ and *)
                             if (t.indexOf('@') >= 0 && t.indexOf(star) >= 0 && t.length < 60) {
+                                // Walk up max 5 levels, but ONLY pick a parent if it's clickable
                                 var target = el;
+                                var cur = el;
                                 for (var k = 0; k < 5; k++) {
-                                    var p = target.parentElement;
+                                    var p = cur.parentElement;
                                     if (!p || p === dialogs[d] || p === document.body) break;
                                     var cs = window.getComputedStyle(p);
                                     if (cs.cursor === 'pointer' || p.getAttribute('role') === 'button'
-                                        || p.tagName === 'A' || p.tagName === 'BUTTON') {
+                                        || p.onclick || p.tagName === 'A' || p.tagName === 'BUTTON') {
                                         target = p;
                                         break;
                                     }
-                                    target = p;
+                                    cur = p;
                                 }
                                 return target;
+                            }
+                        }
+                        // Fallback: find element whose own text (not children) is "Email" and is clickable
+                        for (var j = 0; j < children.length; j++) {
+                            var el2 = children[j];
+                            if (el2.offsetHeight === 0) continue;
+                            var ownText = '';
+                            for (var n = 0; n < el2.childNodes.length; n++) {
+                                if (el2.childNodes[n].nodeType === 3) ownText += el2.childNodes[n].textContent;
+                            }
+                            ownText = ownText.trim();
+                            if (ownText === 'Email' || ownText === 'email') {
+                                // Walk up to find the row container
+                                var row = el2;
+                                for (var m = 0; m < 3; m++) {
+                                    var pp = row.parentElement;
+                                    if (!pp || pp === dialogs[d]) break;
+                                    var pcs = window.getComputedStyle(pp);
+                                    if (pcs.cursor === 'pointer' || pp.getAttribute('role') === 'button'
+                                        || pp.onclick) {
+                                        row = pp;
+                                        break;
+                                    }
+                                    row = pp;
+                                }
+                                return row;
                             }
                         }
                     }
@@ -2066,10 +2095,17 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                 step("verify_find_error", f"Error finding email row: {e}")
 
             if email_row_el:
+                el_info = driver.execute_script("""
+                    var e = arguments[0];
+                    return {tag: e.tagName, cls: (e.className || '').substring(0, 80),
+                            w: e.offsetWidth, h: e.offsetHeight,
+                            cursor: window.getComputedStyle(e).cursor,
+                            text: (e.innerText || '').trim().substring(0, 80)};
+                """, email_row_el)
+                step("verify_email_found", f"Found: {json.dumps(el_info)}")
                 try:
                     ActionChains(driver).move_to_element(email_row_el).click().perform()
-                    email_text = driver.execute_script("return (arguments[0].innerText || '').trim().substring(0, 60)", email_row_el)
-                    step("verify_email_click", f"Clicked email row via ActionChains: {email_text}")
+                    step("verify_email_click", f"ActionChains click OK")
                 except Exception as e:
                     step("verify_email_click", f"ActionChains click failed: {e}")
                     try:
@@ -2083,8 +2119,101 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             time.sleep(3)
             snap(driver, "after_verify_email_click")
 
+            # Check if dialog changed after first click attempt
+            dialog_changed = driver.execute_script("""
+                var dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="verify"]');
+                for (var d = 0; d < dialogs.length; d++) {
+                    var dt = (dialogs[d].innerText || '').toLowerCase();
+                    if (dt.indexOf('send code') >= 0 || dt.indexOf('send a code') >= 0
+                        || dt.indexOf('enter code') >= 0 || dt.indexOf('enter the code') >= 0
+                        || dt.indexOf('verification code') >= 0) return true;
+                }
+                return false;
+            """)
+
+            if not dialog_changed and email_row_el:
+                step("verify_retry", "Dialog unchanged, trying React-style event dispatch")
+                driver.execute_script("""
+                    var el = arguments[0];
+                    // Full React-compatible event sequence
+                    function fireEvent(target, type, opts) {
+                        var ev = new MouseEvent(type, Object.assign({
+                            bubbles: true, cancelable: true, view: window,
+                            clientX: target.getBoundingClientRect().left + target.offsetWidth / 2,
+                            clientY: target.getBoundingClientRect().top + target.offsetHeight / 2
+                        }, opts || {}));
+                        target.dispatchEvent(ev);
+                    }
+                    // Try on the element and each child that might be the actual handler
+                    var targets = [el];
+                    var kids = el.querySelectorAll('*');
+                    for (var i = 0; i < kids.length; i++) {
+                        if (kids[i].offsetHeight > 0) targets.push(kids[i]);
+                    }
+                    // Also try parent
+                    if (el.parentElement) targets.push(el.parentElement);
+
+                    for (var t = 0; t < targets.length; t++) {
+                        fireEvent(targets[t], 'pointerdown');
+                        fireEvent(targets[t], 'mousedown');
+                        fireEvent(targets[t], 'pointerup');
+                        fireEvent(targets[t], 'mouseup');
+                        fireEvent(targets[t], 'click');
+                    }
+                """, email_row_el)
+                time.sleep(3)
+
+                dialog_changed = driver.execute_script("""
+                    var dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="verify"]');
+                    for (var d = 0; d < dialogs.length; d++) {
+                        var dt = (dialogs[d].innerText || '').toLowerCase();
+                        if (dt.indexOf('send code') >= 0 || dt.indexOf('send a code') >= 0
+                            || dt.indexOf('enter code') >= 0 || dt.indexOf('enter the code') >= 0
+                            || dt.indexOf('verification code') >= 0) return true;
+                    }
+                    return false;
+                """)
+                step("verify_retry_result", f"Dialog changed: {dialog_changed}")
+
+            if not dialog_changed and email_row_el:
+                step("verify_retry2", "Trying Selenium click on every child element of email row")
+                child_els = driver.execute_script("""
+                    var el = arguments[0];
+                    var result = [];
+                    // Get the element, its parent, and all visible descendants
+                    if (el.parentElement) result.push(el.parentElement);
+                    result.push(el);
+                    var kids = el.querySelectorAll('*');
+                    for (var i = 0; i < kids.length; i++) {
+                        if (kids[i].offsetHeight > 0) result.push(kids[i]);
+                    }
+                    return result;
+                """, email_row_el)
+                for idx, child in enumerate(child_els[:8]):
+                    try:
+                        ActionChains(driver).move_to_element(child).click().perform()
+                        time.sleep(1.5)
+                        changed = driver.execute_script("""
+                            var dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="verify"]');
+                            for (var d = 0; d < dialogs.length; d++) {
+                                var dt = (dialogs[d].innerText || '').toLowerCase();
+                                if (dt.indexOf('send code') >= 0 || dt.indexOf('send a code') >= 0
+                                    || dt.indexOf('enter code') >= 0 || dt.indexOf('enter the code') >= 0
+                                    || dt.indexOf('verification code') >= 0) return true;
+                            }
+                            return false;
+                        """)
+                        tag = driver.execute_script("return arguments[0].tagName", child)
+                        step("verify_child_click", f"Child {idx} ({tag}): changed={changed}")
+                        if changed:
+                            break
+                    except Exception:
+                        pass
+
             # After clicking email option, check what changed + click Send/Next
             time.sleep(2)
+            snap(driver, "after_verify_all_clicks")
+
             send_code_result = driver.execute_script("""
                 // Check what's visible now in ALL dialogs
                 var dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="overlay"], [class*="verify"]');
