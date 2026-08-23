@@ -3393,318 +3393,112 @@ def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: s
     """Navigate to video and post a comment. Returns (success, detail)."""
     try:
         driver.get(video_url)
-        time.sleep(random.uniform(5, 8))
+        time.sleep(random.uniform(4, 6))
         _dismiss_cookie_banner(driver)
-        _random_mouse_move(driver, 2)
 
-        # Step 1: Click the comment icon to open comment panel (if needed)
-        comment_icon_result = driver.execute_script("""
-            // Check if comment input is already visible
-            var existing = document.querySelector('[data-e2e="comment-input"], [class*="CommentInput"], [class*="comment-input"]');
-            if (existing && existing.offsetHeight > 0) return 'already_visible';
+        # Watch video for a moment (human behavior)
+        _human_delay(2, 4)
 
-            // Try clicking comment icon/button
-            var selectors = [
-                '[data-e2e="comment-icon"]',
-                '[data-e2e="browse-comment-icon"]',
-                '[data-e2e="comment-count"]',
-                'button[aria-label*="comment" i]',
-                'button[aria-label*="Comment" i]',
-                'span[data-e2e="comment-icon"]',
+        # Find and click the comment input area
+        # On video page, comment input is usually at the bottom
+        clicked = driver.execute_script("""
+            // Try clicking on comment input container or placeholder
+            var sels = [
+                '[data-e2e="comment-input"]',
+                '[class*="DraftEditor"]',
+                '[class*="CommentInput"]',
+                '[class*="comment-input"]',
+                '[contenteditable="true"]',
             ];
-            for (var s = 0; s < selectors.length; s++) {
-                var el = document.querySelector(selectors[s]);
-                if (el && el.offsetHeight > 0) {
-                    el.click();
-                    return 'clicked:' + selectors[s];
+            for (var s = 0; s < sels.length; s++) {
+                var els = document.querySelectorAll(sels[s]);
+                for (var i = 0; i < els.length; i++) {
+                    if (els[i].offsetHeight > 0 && els[i].offsetWidth > 20) {
+                        els[i].click();
+                        return 'clicked:' + sels[s];
+                    }
                 }
             }
-
-            // Try finding by comment count text pattern
-            var els = document.querySelectorAll('button, span, div');
-            for (var i = 0; i < els.length; i++) {
-                var e = els[i];
-                if (e.offsetHeight === 0) continue;
-                var ariaLabel = (e.getAttribute('aria-label') || '').toLowerCase();
-                if (ariaLabel.indexOf('comment') !== -1) {
-                    e.click();
-                    return 'clicked:aria-comment';
+            // Try placeholder text
+            var all = document.querySelectorAll('div, span, p');
+            for (var j = 0; j < all.length; j++) {
+                var el = all[j];
+                if (el.offsetHeight === 0) continue;
+                var ph = (el.getAttribute('data-placeholder') || el.textContent || '').toLowerCase();
+                if ((ph.indexOf('add a comment') !== -1 || ph.indexOf('add comment') !== -1) && el.offsetHeight < 100) {
+                    el.click();
+                    return 'clicked:placeholder';
                 }
             }
             return 'not_found';
         """)
-        logger.info(f"Comment icon: {comment_icon_result}")
+        logger.info(f"Comment area click: {clicked}")
 
-        if comment_icon_result == 'not_found':
-            snap(driver, "no_comment_icon")
-            return False, "no_comment_icon"
+        if clicked == 'not_found':
+            snap(driver, "no_comment_area")
+            return False, "no_comment_area"
 
-        if comment_icon_result != 'already_visible':
-            _human_delay(2, 4)
+        _human_delay(1, 2)
 
-        # Step 2: Click on the comment placeholder to activate the input
+        # Click again on contenteditable to ensure focus
         driver.execute_script("""
-            // Click on "Add comment" placeholder area first
-            var placeholders = document.querySelectorAll(
-                '[data-e2e="comment-input"], [class*="CommentInput"], [class*="comment-input"], ' +
-                '[class*="BottomComment"], [class*="bottom-comment"], [class*="CommentContainer"]'
-            );
-            for (var i = 0; i < placeholders.length; i++) {
-                if (placeholders[i].offsetHeight > 0) {
-                    placeholders[i].click();
-                    return 'clicked_container';
+            var ce = document.querySelectorAll('[contenteditable="true"]');
+            for (var i = 0; i < ce.length; i++) {
+                if (ce[i].offsetHeight > 0 && ce[i].offsetWidth > 20) {
+                    ce[i].click();
+                    ce[i].focus();
+                    break;
                 }
             }
-            // Try clicking any element with "Add comment" or "comment" placeholder text
-            var all = document.querySelectorAll('div, span, p, input');
-            for (var j = 0; j < all.length; j++) {
-                var el = all[j];
-                if (el.offsetHeight === 0) continue;
-                var text = (el.textContent || el.placeholder || el.getAttribute('data-placeholder') || '').toLowerCase();
-                if ((text.indexOf('add comment') !== -1 || text.indexOf('add a comment') !== -1 ||
-                     text === 'comment' || text === 'comments') && el.offsetHeight < 100) {
-                    el.click();
-                    return 'clicked_placeholder';
-                }
-            }
-            return 'no_placeholder';
         """)
-        _human_delay(1.5, 3)
+        _human_delay(0.5, 1)
 
-        # Step 3: Find the comment input field
-        def _find_comment_input():
-            return driver.execute_script("""
-                var selectors = [
-                    '[data-e2e="comment-input"] [contenteditable="true"]',
-                    '[class*="CommentInput"] [contenteditable="true"]',
-                    '[class*="comment-input"] [contenteditable="true"]',
-                    '[contenteditable="true"][data-placeholder*="comment" i]',
-                    '[contenteditable="true"][data-placeholder*="Add" i]',
-                    '[class*="DraftEditor"] [contenteditable="true"]',
-                    '[class*="public-DraftEditor"] [contenteditable="true"]',
-                    'br[data-text="true"]',
-                ];
-                for (var s = 0; s < selectors.length; s++) {
-                    var els = document.querySelectorAll(selectors[s]);
-                    for (var i = 0; i < els.length; i++) {
-                        var el = els[i];
-                        // For br[data-text], return the parent contenteditable
-                        if (el.tagName === 'BR') {
-                            var p = el.closest('[contenteditable="true"]');
-                            if (p && p.offsetHeight > 0) return p;
-                            continue;
-                        }
-                        if (el.offsetHeight > 0 && el.offsetWidth > 20) return el;
-                    }
-                }
-                // Fallback: any visible contenteditable
-                var all = document.querySelectorAll('[contenteditable="true"]');
-                for (var j = 0; j < all.length; j++) {
-                    if (all[j].offsetHeight > 0 && all[j].offsetWidth > 20) {
-                        var rect = all[j].getBoundingClientRect();
-                        if (rect.width < 800 && rect.height < 200) return all[j];
-                    }
-                }
-                return null;
-            """)
-
-        comment_box = _find_comment_input()
-
-        if not comment_box:
-            # Take screenshot and log what we see
-            snap(driver, "no_comment_box")
-            diag = driver.execute_script("""
-                var ce = document.querySelectorAll('[contenteditable]');
-                var info = [];
-                for (var i = 0; i < ce.length; i++) {
-                    info.push({tag: ce[i].tagName, ce: ce[i].getAttribute('contenteditable'),
-                               h: ce[i].offsetHeight, w: ce[i].offsetWidth,
-                               ph: ce[i].getAttribute('data-placeholder') || '',
-                               cls: (ce[i].className || '').substring(0, 60)});
-                }
-                var inputs = document.querySelectorAll('input[type="text"], textarea');
-                for (var j = 0; j < inputs.length; j++) {
-                    info.push({tag: inputs[j].tagName, h: inputs[j].offsetHeight,
-                               ph: inputs[j].placeholder || '', name: inputs[j].name || ''});
-                }
-                return JSON.stringify(info);
-            """)
-            logger.warning(f"No comment input found. Editables: {diag}")
-            return False, "no_comment_input"
-
-        # Step 4: Click comment box and type via active element
-        # Click with ActionChains to properly activate Draft.js
+        # Type comment via active element + submit with Enter
+        from selenium.webdriver.common.keys import Keys
         try:
-            ActionChains(driver).move_to_element(comment_box).click().perform()
+            active = driver.switch_to.active_element
+            active.send_keys(comment_text)
         except Exception:
-            driver.execute_script("arguments[0].click()", comment_box)
-        _human_delay(1, 1.5)
+            try:
+                ActionChains(driver).send_keys(comment_text).perform()
+            except Exception as e:
+                logger.error(f"Typing failed: {e}")
+                snap(driver, "type_failed")
+                return False, "text_entry_failed"
 
-        # Re-find after click (React/Draft.js may re-render the editor)
-        comment_box = _find_comment_input() or comment_box
+        _human_delay(1, 2)
 
-        # Click again to make sure Draft.js editor is focused
-        try:
-            ActionChains(driver).move_to_element(comment_box).click().perform()
-        except Exception:
-            pass
-        _human_delay(0.5, 0.8)
-
-        # Type using the active element (whatever has focus after clicking)
-        entered = ""
-        for attempt in range(3):
-            if attempt > 0:
-                # Re-click to refocus
-                try:
-                    comment_box = _find_comment_input() or comment_box
-                    ActionChains(driver).move_to_element(comment_box).click().perform()
-                except Exception:
-                    pass
-                _human_delay(0.5, 1)
-
-            if attempt == 0:
-                # Method 1: send_keys to active element (best for Draft.js)
-                try:
-                    active = driver.switch_to.active_element
-                    active.send_keys(comment_text)
-                    logger.info("Typed via active_element.send_keys")
-                except Exception as e:
-                    logger.warning(f"active_element.send_keys failed: {e}")
-
-            elif attempt == 1:
-                # Method 2: ActionChains char by char
-                try:
-                    for ch in comment_text:
-                        ActionChains(driver).send_keys(ch).perform()
-                        _human_delay(0.03, 0.08)
-                    logger.info("Typed via ActionChains char-by-char")
-                except Exception as e:
-                    logger.warning(f"ActionChains typing failed: {e}")
-
-            elif attempt == 2:
-                # Method 3: execCommand as last resort
-                try:
-                    driver.execute_script("""
-                        var el = arguments[0];
-                        el.focus();
-                        document.execCommand('selectAll', false, null);
-                        document.execCommand('delete', false, null);
-                        document.execCommand('insertText', false, arguments[1]);
-                        el.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: arguments[1]}));
-                    """, comment_box, comment_text)
-                    logger.info("Typed via execCommand + InputEvent")
-                except Exception as e:
-                    logger.warning(f"execCommand failed: {e}")
-
-            _human_delay(1, 1.5)
-
-            # Check if text appeared AND placeholder disappeared
-            check = driver.execute_script("""
-                var el = arguments[0];
-                var text = (el.textContent || el.innerText || '').trim();
-                // Check if Post button is enabled
-                var postBtn = document.querySelector('[data-e2e="comment-post"]');
-                var postEnabled = false;
-                if (postBtn) {
-                    var style = window.getComputedStyle(postBtn);
-                    postEnabled = style.opacity !== '0.5' && style.pointerEvents !== 'none'
-                                  && !postBtn.disabled && style.cursor !== 'not-allowed';
-                }
-                if (!postBtn) {
-                    // Check for any Post button
-                    var allBtns = document.querySelectorAll('button, div[role="button"]');
-                    for (var i = 0; i < allBtns.length; i++) {
-                        var t = (allBtns[i].innerText || '').trim().toLowerCase();
-                        if (t === 'post' && allBtns[i].offsetHeight > 0) {
-                            postEnabled = true;
-                            break;
-                        }
-                    }
-                }
-                return {text: text, postEnabled: postEnabled, hasPlaceholder: el.getAttribute('data-placeholder') ? true : false};
-            """)
-            entered = check.get("text", "")
-            post_enabled = check.get("postEnabled", False)
-            logger.info(f"Attempt {attempt+1}: text='{entered[:50]}', postEnabled={post_enabled}")
-
-            if entered and post_enabled:
-                break
-            if entered and attempt >= 1:
-                break
+        # Verify text was entered
+        entered = driver.execute_script("""
+            var ce = document.querySelectorAll('[contenteditable="true"]');
+            for (var i = 0; i < ce.length; i++) {
+                var t = (ce[i].textContent || '').trim();
+                if (t.length > 0 && ce[i].offsetHeight > 0) return t;
+            }
+            return '';
+        """)
 
         if not entered:
             snap(driver, "comment_text_empty")
             return False, "text_entry_failed"
 
-        logger.info(f"Comment text entered: '{entered[:50]}'")
+        logger.info(f"Comment entered: '{entered[:50]}'")
 
-        # Step 5: Find post button and click with real mouse event
-        post_btn_el = driver.execute_script("""
-            // data-e2e post button
-            var btn = document.querySelector('[data-e2e="comment-post"]');
-            if (btn && btn.offsetHeight > 0) return btn;
+        # Submit with Enter key (TikTok supports this)
+        _human_delay(0.5, 1)
+        try:
+            active = driver.switch_to.active_element
+            active.send_keys(Keys.RETURN)
+            logger.info("Submitted via Enter key")
+        except Exception:
+            ActionChains(driver).send_keys(Keys.RETURN).perform()
+            logger.info("Submitted via ActionChains Enter")
 
-            // Button/div with "Post" text near comment area
-            var areas = document.querySelectorAll(
-                '[data-e2e="comment-input"], [class*="CommentInput"], [class*="comment-input"], ' +
-                '[class*="BottomComment"], [class*="bottom-comment"], [class*="CommentContainer"]'
-            );
-            for (var a = 0; a < areas.length; a++) {
-                var btns = areas[a].querySelectorAll('button, div[role="button"], span[role="button"], div[class*="Post"], div[class*="post"]');
-                for (var i = 0; i < btns.length; i++) {
-                    var t = (btns[i].innerText || btns[i].getAttribute('aria-label') || '').trim().toLowerCase();
-                    if ((t === 'post' || t === 'send') && btns[i].offsetHeight > 0) return btns[i];
-                }
-            }
-
-            // Global: any visible element with exact text "Post"
-            var allEls = document.querySelectorAll('button, div[role="button"], div, span');
-            for (var j = 0; j < allEls.length; j++) {
-                if (allEls[j].offsetHeight === 0 || allEls[j].offsetWidth === 0) continue;
-                var txt = (allEls[j].innerText || '').trim();
-                if (txt === 'Post' || txt === 'post' || txt === 'Send' || txt === 'send') {
-                    // Make sure it's a leaf-level element (not a container with other text)
-                    if (txt.length <= 5) return allEls[j];
-                }
-            }
-
-            return null;
-        """)
-
-        post_result = 'not_found'
-        if post_btn_el:
-            # Click with ActionChains (real mouse click, not JS .click())
-            try:
-                ActionChains(driver).move_to_element(post_btn_el).pause(0.3).click().perform()
-                post_result = 'actionchains'
-            except Exception:
-                try:
-                    post_btn_el.click()
-                    post_result = 'element_click'
-                except Exception:
-                    try:
-                        driver.execute_script("""
-                            var el = arguments[0];
-                            el.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}));
-                            el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
-                            el.dispatchEvent(new PointerEvent('pointerup', {bubbles: true}));
-                            el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
-                            el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                        """, post_btn_el)
-                        post_result = 'react_dispatch'
-                    except Exception:
-                        post_result = 'all_failed'
-
-        if post_result == 'not_found':
-            snap(driver, "no_post_btn")
-            return False, "no_post_button"
-
-        logger.info(f"Post button clicked: {post_result}")
         _human_delay(3, 5)
 
-        # Check for errors (rate limit, blocked, etc.)
+        # Check for errors
         error_text = driver.execute_script("""
-            var errSels = '[class*="toast"], [class*="Toast"], [class*="snack"], [class*="Snack"], [class*="notification"], [class*="error"], [class*="Error"]';
+            var errSels = '[class*="toast"], [class*="Toast"], [class*="snack"], [class*="Snack"], [class*="notification"]';
             var els = document.querySelectorAll(errSels);
             for (var i = 0; i < els.length; i++) {
                 var t = (els[i].innerText || '').trim();
@@ -3716,9 +3510,22 @@ def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: s
         if error_text:
             err_lower = error_text.lower()
             if any(w in err_lower for w in ["too fast", "too many", "rate", "limit", "blocked", "restricted", "muted"]):
-                logger.warning(f"Comment rate limited: {error_text}")
+                logger.warning(f"Rate limited: {error_text}")
                 return False, f"rate_limited: {error_text[:100]}"
-            logger.warning(f"Comment error toast: {error_text}")
+            logger.warning(f"Toast: {error_text}")
+
+        # Check if comment input is now empty (comment was sent)
+        after_text = driver.execute_script("""
+            var ce = document.querySelectorAll('[contenteditable="true"]');
+            for (var i = 0; i < ce.length; i++) {
+                if (ce[i].offsetHeight > 0) return (ce[i].textContent || '').trim();
+            }
+            return '';
+        """)
+        if after_text and after_text == entered:
+            logger.warning("Comment text still in input — may not have been sent")
+            snap(driver, "comment_not_sent")
+            return False, "comment_not_sent"
 
         logger.info(f"Comment posted: {video_url}")
         return True, "ok"
