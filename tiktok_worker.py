@@ -671,8 +671,16 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-software-rasterizer")
-    _w = random.choice([1366, 1440, 1536, 1680, 1920])
-    _h = random.choice([768, 900, 864, 1050, 1080])
+    options.add_argument("--disable-background-networking")
+    options.add_argument("--disable-default-apps")
+    options.add_argument("--disable-sync")
+    options.add_argument("--disable-translate")
+    options.add_argument("--no-first-run")
+    options.add_argument("--disable-backgrounding-occluded-windows")
+    options.add_argument("--disable-renderer-backgrounding")
+    options.add_argument("--js-flags=--max-old-space-size=384")
+    _w = random.choice([1366, 1440, 1536])
+    _h = random.choice([768, 900, 864])
     options.add_argument(f"--window-size={_w},{_h}")
     options.add_argument(f"--user-agent={UA}")
     options.add_argument("--lang=en-US")
@@ -708,8 +716,11 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
     if chrome_binary:
         options.binary_location = chrome_binary
 
+    options.page_load_strategy = 'eager'
+
     service = Service("/usr/local/bin/chromedriver")
     driver = webdriver.Chrome(service=service, options=options)
+    driver.set_page_load_timeout(45)
     driver.set_window_size(_w, _h)
 
     # NO CDP stealth injection — all stealth is via extension now
@@ -1438,8 +1449,27 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                 return {"ok": False, "steps": steps, "error": f"Proxy failed: {e}"}
 
         # Step 1: Warm up — browse like a real user before login
-        driver.get("https://www.tiktok.com")
-        time.sleep(random.uniform(3, 5))
+        for attempt in range(2):
+            try:
+                driver.get("https://www.tiktok.com")
+                time.sleep(random.uniform(3, 5))
+                break
+            except Exception as e:
+                if attempt == 0:
+                    step("homepage_retry", f"Homepage load failed ({type(e).__name__}), retrying with new browser...")
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
+                    time.sleep(2)
+                    driver = _create_driver(proxy)
+                else:
+                    step("homepage_fail", f"Homepage failed twice: {e}")
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
+                    return {"ok": False, "steps": steps, "error": f"Chrome crashed: {e}"}
         _dismiss_cookie_banner(driver)
 
         # Simulate human browsing: scroll, move mouse, wait
