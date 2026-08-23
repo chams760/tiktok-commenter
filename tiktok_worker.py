@@ -2073,7 +2073,7 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                             var el = allEls[i];
                             if (el.offsetHeight === 0) continue;
                             var t = (el.innerText || '').trim();
-                            if (t.match(/@/) && t.match(/\\*/) && t.length < 50) {
+                            if (t.indexOf('@') >= 0 && t.indexOf('*') >= 0 && t.length < 50) {
                                 // Walk up to find the clickable row
                                 var target = el;
                                 for (var k = 0; k < 5; k++) {
