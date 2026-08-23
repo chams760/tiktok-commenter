@@ -3537,30 +3537,41 @@ def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: s
         # Re-find after click (React may re-render)
         comment_box = _find_comment_input() or comment_box
 
-        # Step 4: Type comment
+        # Step 4: Type comment using real keyboard events (React needs these)
+        # Clear any existing text first
         driver.execute_script("""
             var el = arguments[0];
-            var text = arguments[1];
             el.focus();
             el.textContent = '';
-            document.execCommand('insertText', false, text);
-            el.dispatchEvent(new Event('input', {bubbles: true}));
-            el.dispatchEvent(new Event('change', {bubbles: true}));
-        """, comment_box, comment_text)
+            el.innerHTML = '';
+        """, comment_box)
+        _human_delay(0.3, 0.5)
+
+        # Type character by character via ActionChains (real keyboard events)
+        try:
+            ActionChains(driver).move_to_element(comment_box).click().perform()
+            _human_delay(0.3, 0.5)
+            for ch in comment_text:
+                ActionChains(driver).send_keys(ch).perform()
+                _human_delay(0.03, 0.1)
+        except Exception as type_err:
+            logger.warning(f"ActionChains typing failed: {type_err}, trying send_keys")
+            try:
+                comment_box.send_keys(comment_text)
+            except Exception:
+                pass
         _human_delay(1, 2)
 
         # Verify text was entered
         entered = driver.execute_script("return (arguments[0].textContent || arguments[0].innerText || '').trim()", comment_box)
         if not entered:
-            # Fallback: send_keys char by char
-            try:
-                ActionChains(driver).move_to_element(comment_box).click().perform()
-                _human_delay(0.3, 0.5)
-                for ch in comment_text:
-                    comment_box.send_keys(ch)
-                    _human_delay(0.02, 0.08)
-            except Exception:
-                pass
+            # Last resort: execCommand
+            driver.execute_script("""
+                var el = arguments[0];
+                el.focus();
+                document.execCommand('selectAll', false, null);
+                document.execCommand('insertText', false, arguments[1]);
+            """, comment_box, comment_text)
             _human_delay(0.5, 1)
             entered = driver.execute_script("return (arguments[0].textContent || '').trim()", comment_box)
             if not entered:
@@ -3568,6 +3579,9 @@ def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: s
                 return False, "text_entry_failed"
 
         logger.info(f"Comment text entered: '{entered[:50]}'")
+
+        # Wait a moment for React to enable the Post button
+        _human_delay(1, 2)
 
         # Step 5: Click post button
         post_result = driver.execute_script("""
