@@ -2803,12 +2803,18 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             driver.quit()
             return {"ok": False, "steps": steps, "error": "Rate limited — wait 2-4 hours"}
 
-        # Check for wrong password
+        # Check for wrong password or non-existent account
         errors_text = " ".join(modal_data.get("errors", [])).lower()
-        if "incorrect" in errors_text or "wrong" in errors_text or "invalid" in errors_text:
-            step("wrong_creds", f"Wrong credentials: {errors_text[:200]}")
+        modal_text_lower = modal_data.get("modalText", "").lower()
+        all_text = errors_text + " " + modal_text_lower
+        if "incorrect" in all_text or "wrong" in all_text or "invalid" in all_text:
+            step("wrong_creds", f"Wrong credentials: {all_text[:200]}")
             driver.quit()
             return {"ok": False, "steps": steps, "error": "Wrong username or password"}
+        if "doesn" in all_text and "exist" in all_text:
+            step("account_not_found", f"Account doesn't exist: {all_text[:200]}")
+            driver.quit()
+            return {"ok": False, "steps": steps, "error": "Account doesn't exist"}
 
         # Check if modal is still open (login might still be in progress)
         modal_still_open = modal_data.get("modalVisible", False)
@@ -2888,8 +2894,12 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                 pass
 
         # Login failed — check if verification needed
+        try:
+            body_after = driver.execute_script("return document.body ? document.body.innerText : '';") or ""
+        except Exception:
+            body_after = ""
         body_after_lower = body_after.lower()
-        if "verify" in body_after_lower or "enter.*code" in body_after_lower:
+        if "verify" in body_after_lower or "code" in body_after_lower:
             step("verify_needed", "Verification page detected after reload")
         else:
             # Collect comprehensive diagnostics
@@ -2914,14 +2924,6 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             step("failed_silent", f"Login failed. Diag: {diag} | ModalErrors: {modal_data.get('errors', [])}")
             driver.quit()
             return {"ok": False, "steps": steps, "error": f"Login failed silently. Diagnostics: {diag}"}
-
-        # Step 5: Handle verification page
-        # At this point we know verify was detected in body_after
-        if "verify" not in body_after.lower() and "code" not in body_after.lower():
-            snap(driver, "login_failed")
-            step("failed", f"Login failed. Body: {body_after[:300]}")
-            driver.quit()
-            return {"ok": False, "steps": steps, "error": "Login failed"}
 
         step("verify_page", "Verification page detected")
         snap(driver, "verify_page")
