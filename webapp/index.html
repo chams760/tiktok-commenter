@@ -370,16 +370,23 @@
     <div class="section-label" style="margin-top:24px;">Cookie import</div>
     <div class="card" style="margin-bottom:12px;">
         <div style="font-size:13px;color:var(--text-2);margin-bottom:12px;">
-            Paste cookies — supports Netscape .txt format and JSON (EditThisCookie, Cookie-Editor).
+            F12 → Application → Cookies → tiktok.com. Copy <b>sessionid</b> value and paste below.
         </div>
         <div class="field" style="margin-bottom:8px;">
-            <input type="text" id="cookie-username" placeholder="TikTok username (optional — auto-detect)">
+            <input type="text" id="cookie-username" placeholder="TikTok username (optional)">
+        </div>
+        <div class="field" style="margin-bottom:8px;">
+            <input type="text" id="cookie-sessionid" placeholder="sessionid (required)">
+        </div>
+        <div class="field" style="margin-bottom:8px;">
+            <input type="text" id="cookie-sid-tt" placeholder="sid_tt (optional, same as sessionid usually)">
         </div>
         <div class="field" style="margin-bottom:8px;">
             <input type="text" id="cookie-proxy" placeholder="Proxy (optional) — login:pass:host:port">
         </div>
+        <div class="sep"><span>or paste full JSON / txt export</span></div>
         <div class="field" style="margin-bottom:0;">
-            <textarea id="cookie-json" rows="6" placeholder='.tiktok.com&#9;TRUE&#9;/&#9;TRUE&#9;0&#9;sessionid&#9;abc123...&#10;&#10;or JSON: [{"name":"sessionid","value":"..."}]' style="width:100%;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:10px;font-family:monospace;font-size:12px;resize:vertical;"></textarea>
+            <textarea id="cookie-json" rows="4" placeholder='Optional: full cookie export JSON or Netscape .txt' style="width:100%;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:10px;font-family:monospace;font-size:12px;resize:vertical;"></textarea>
         </div>
     </div>
     <button class="btn btn-secondary" id="btn-import-cookies" onclick="importCookies()">
@@ -835,17 +842,32 @@ async function apiSubmitCode() {
 
 async function importCookies() {
     const username = document.getElementById('cookie-username').value.trim();
+    const sessionid = document.getElementById('cookie-sessionid').value.trim();
+    const sidTt = document.getElementById('cookie-sid-tt').value.trim();
     const proxy = document.getElementById('cookie-proxy').value.trim();
     const cookiesRaw = document.getElementById('cookie-json').value.trim();
-    if (!cookiesRaw) { toast('Paste cookies', 'error'); return; }
+
+    if (!sessionid && !cookiesRaw) { toast('Enter sessionid or paste cookies', 'error'); return; }
+
+    const body = { username, proxy };
+    if (sessionid) {
+        body.sessionid = sessionid;
+        body.sid_tt = sidTt || sessionid;
+    }
+    if (cookiesRaw) {
+        body.cookies = cookiesRaw;
+    }
+
     const btn = document.getElementById('btn-import-cookies');
     btn.disabled = true;
-    const res = await api('POST', '/api/import-cookies', { username, cookies: cookiesRaw, proxy });
+    const res = await api('POST', '/api/import-cookies', body);
     btn.disabled = false;
     if (res.ok) {
-        toast(res.count + ' cookies imported for ' + res.username + (res.account_added ? ' (added to dashboard)' : ''), 'success');
+        toast(res.count + ' cookies imported' + (res.account_added ? ' — added to dashboard' : ''), 'success');
         document.getElementById('cookie-json').value = '';
         document.getElementById('cookie-username').value = '';
+        document.getElementById('cookie-sessionid').value = '';
+        document.getElementById('cookie-sid-tt').value = '';
         document.getElementById('cookie-proxy').value = '';
     } else {
         toast(res.error || 'Error', 'error');

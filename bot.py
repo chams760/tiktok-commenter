@@ -322,17 +322,38 @@ async def api_import_cookies(request):
         data = await request.json()
         username = data.get("username", "").strip()
         cookies_raw = data.get("cookies", "")
-        if not cookies_raw:
-            return web.json_response({"error": "cookies required"}, status=400)
+        sessionid = data.get("sessionid", "").strip()
+        sid_tt = data.get("sid_tt", "").strip()
+
+        if not sessionid and not cookies_raw:
+            return web.json_response({"error": "sessionid or cookies required"}, status=400)
 
         pw_cookies = []
-        if isinstance(cookies_raw, str):
-            stripped = cookies_raw.strip()
-            if stripped.startswith("[") or stripped.startswith("{"):
-                cookies = _json.loads(stripped)
-                if isinstance(cookies, dict):
-                    cookies = [cookies]
-                for c in cookies:
+
+        # Parse full cookie export if provided
+        if cookies_raw:
+            if isinstance(cookies_raw, str):
+                stripped = cookies_raw.strip()
+                if stripped.startswith("[") or stripped.startswith("{"):
+                    cookies = _json.loads(stripped)
+                    if isinstance(cookies, dict):
+                        cookies = [cookies]
+                    for c in cookies:
+                        pc = {
+                            "name": c.get("name", ""),
+                            "value": c.get("value", ""),
+                            "domain": c.get("domain", ".tiktok.com"),
+                            "path": c.get("path", "/"),
+                        }
+                        if c.get("expirationDate"):
+                            pc["expires"] = c["expirationDate"]
+                        elif c.get("expires"):
+                            pc["expires"] = c["expires"]
+                        pw_cookies.append(pc)
+                else:
+                    pw_cookies = _parse_netscape_cookies(stripped)
+            elif isinstance(cookies_raw, list):
+                for c in cookies_raw:
                     pc = {
                         "name": c.get("name", ""),
                         "value": c.get("value", ""),
@@ -344,23 +365,19 @@ async def api_import_cookies(request):
                     elif c.get("expires"):
                         pc["expires"] = c["expires"]
                     pw_cookies.append(pc)
-            else:
-                pw_cookies = _parse_netscape_cookies(stripped)
-                if not pw_cookies:
-                    return web.json_response({"error": "Could not parse cookies — expected JSON or Netscape .txt format"}, status=400)
-        elif isinstance(cookies_raw, list):
-            for c in cookies_raw:
-                pc = {
-                    "name": c.get("name", ""),
-                    "value": c.get("value", ""),
-                    "domain": c.get("domain", ".tiktok.com"),
-                    "path": c.get("path", "/"),
-                }
-                if c.get("expirationDate"):
-                    pc["expires"] = c["expirationDate"]
-                elif c.get("expires"):
-                    pc["expires"] = c["expires"]
-                pw_cookies.append(pc)
+
+        # Add sessionid/sid_tt from separate fields (merge or create)
+        if sessionid:
+            existing_names = {c["name"] for c in pw_cookies}
+            if "sessionid" not in existing_names:
+                pw_cookies.append({"name": "sessionid", "value": sessionid, "domain": ".tiktok.com", "path": "/"})
+            if "sid_tt" not in existing_names:
+                pw_cookies.append({"name": "sid_tt", "value": sid_tt or sessionid, "domain": ".tiktok.com", "path": "/"})
+            if "sid_guard" not in existing_names:
+                pw_cookies.append({"name": "sid_guard", "value": sessionid, "domain": ".tiktok.com", "path": "/"})
+
+        if not pw_cookies:
+            return web.json_response({"error": "No cookies parsed"}, status=400)
 
         if not username:
             sid = next((c["value"][:8] for c in pw_cookies if c["name"] == "sessionid"), None)
