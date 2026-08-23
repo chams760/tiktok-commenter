@@ -126,6 +126,12 @@ async def delete_all_accounts():
         await db.commit()
 
 
+async def delete_account(account_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+        await db.commit()
+
+
 async def create_task(query: str, comment: str, max_comments: int) -> int:
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:

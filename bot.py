@@ -158,6 +158,16 @@ async def api_delete_accounts(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+async def api_delete_account(request):
+    try:
+        import database as db
+        account_id = int(request.match_info["id"])
+        await db.delete_account(account_id)
+        return web.json_response({"ok": True})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def api_cancel_task(request):
     try:
         import database as db
@@ -487,6 +497,7 @@ async def start_health_server():
     app.router.add_post("/api/task", api_create_task)
     app.router.add_post("/api/accounts", api_upload_accounts)
     app.router.add_delete("/api/accounts", api_delete_accounts)
+    app.router.add_delete("/api/accounts/{id}", api_delete_account)
     app.router.add_post("/api/cancel", api_cancel_task)
     app.router.add_post("/api/import-cookies", api_import_cookies)
     app.router.add_post("/api/verify-code", api_verify_code)

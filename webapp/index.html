@@ -561,8 +561,11 @@ function renderAccounts(accounts) {
         const cls = a.status === 'active' ? 'badge-ok' : 'badge-err';
         const proxyTag = a.proxy ? `<span class="badge badge-warn" style="font-size:10px;padding:2px 6px;margin-left:6px;" title="${esc(a.proxy)}">proxy</span>` : '';
         return `<div class="acc-item">
-            <div><div class="acc-name">${esc(a.username)}${proxyTag}</div><div class="acc-meta">${a.comments_today} comments today</div></div>
-            <span class="badge ${cls}">${a.status}</span>
+            <div style="flex:1;min-width:0;"><div class="acc-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(a.username)}${proxyTag}</div><div class="acc-meta">${a.comments_today} comments today</div></div>
+            <span class="badge ${cls}" style="margin-right:8px;">${a.status}</span>
+            <button onclick="deleteAccount(${a.id})" style="background:none;border:none;color:var(--accent);cursor:pointer;padding:4px;" title="Delete">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
         </div>`;
     }).join('');
 }
@@ -632,6 +635,12 @@ async function deleteAccounts() {
     if (!confirm('Delete all accounts?')) return;
     const res = await api('DELETE', '/api/accounts');
     if (res.ok) { toast('All accounts deleted', 'success'); loadStats(); }
+    else toast(res.error || 'Error', 'error');
+}
+
+async function deleteAccount(id) {
+    const res = await api('DELETE', '/api/accounts/' + id);
+    if (res.ok) { toast('Account deleted', 'success'); loadStats(); }
     else toast(res.error || 'Error', 'error');
 }
 
