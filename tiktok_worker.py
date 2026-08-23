@@ -3391,10 +3391,36 @@ def _search_videos_sync(driver: webdriver.Chrome, query: str, max_results: int =
 
 def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: str) -> tuple[bool, str]:
     """Navigate to video and post a comment. Returns (success, detail)."""
+    def snap(drv, name):
+        try:
+            p = os.path.join(SCREENSHOTS_DIR, f"{name}_{int(time.time())}.png")
+            drv.save_screenshot(p)
+        except Exception:
+            pass
+
     try:
         driver.get(video_url)
         time.sleep(random.uniform(4, 6))
         _dismiss_cookie_banner(driver)
+
+        # Check for captcha on page load
+        page_captcha = driver.execute_script("""
+            var sels = ['[class*="captcha_verify"]', '[id*="captcha"]',
+                        '[class*="TUICaptcha"]', '[class*="seam-modal"]',
+                        'iframe[src*="captcha"]', 'iframe[src*="verify"]'];
+            for (var i = 0; i < sels.length; i++) {
+                var el = document.querySelector(sels[i]);
+                if (el && el.offsetHeight > 0) return true;
+            }
+            return false;
+        """)
+        if page_captcha:
+            logger.info("Captcha on video page, solving...")
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            steps = []
+            def _step_load(name, detail): steps.append({"step": name, "detail": detail}); logger.info(f"captcha: {name} — {detail}")
+            _try_solve_captcha(driver, steps, _step_load, snap, ts)
+            _human_delay(2, 3)
 
         # Watch video for a moment (human behavior)
         _human_delay(2, 3)
@@ -3543,6 +3569,34 @@ def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: s
 
         _human_delay(3, 5)
 
+        # Check for captcha after submitting comment
+        has_captcha = driver.execute_script("""
+            var sels = ['[class*="captcha_verify"]', '[id*="captcha"]',
+                        '[class*="TUICaptcha"]', '[class*="captcha-container"]',
+                        '[class*="seam-modal"]', 'iframe[src*="captcha"]',
+                        'iframe[src*="verify"]'];
+            for (var i = 0; i < sels.length; i++) {
+                var el = document.querySelector(sels[i]);
+                if (el && el.offsetHeight > 0) return true;
+            }
+            var bt = (document.body.innerText || '').toLowerCase();
+            if (bt.match(/drag.*slider|slide.*puzzle|verify.*human/)) return true;
+            return false;
+        """)
+
+        if has_captcha:
+            logger.info("Captcha detected after comment submit, solving...")
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            steps = []
+            def _step(name, detail): steps.append({"step": name, "detail": detail}); logger.info(f"captcha: {name} — {detail}")
+            solved = _try_solve_captcha(driver, steps, _step, snap, ts)
+            if solved:
+                logger.info("Captcha solved, re-submitting comment")
+                _human_delay(2, 3)
+            else:
+                logger.warning("Captcha not solved")
+                return False, "captcha_failed"
+
         # Check for errors
         error_text = driver.execute_script("""
             var errSels = '[class*="toast"], [class*="Toast"], [class*="snack"], [class*="Snack"], [class*="notification"]';
@@ -3672,6 +3726,11 @@ async def run_task(task_id: int):
                     await db.update_task(task_id, status="paused_rate_limit",
                                         comments_done=comments_done, comments_failed=comments_failed)
                     return
+
+                if "captcha_failed" in detail:
+                    logger.warning(f"Task #{task_id}: captcha not solved, waiting 60s before retry")
+                    await asyncio.sleep(60)
+                    continue
 
             await db.update_task(task_id, comments_done=comments_done, comments_failed=comments_failed)
 
