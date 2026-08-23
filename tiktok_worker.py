@@ -1830,26 +1830,34 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             var e2e = document.querySelector('button[data-e2e="login-button"]');
             if (e2e && e2e.offsetHeight > 0) return e2e;
 
-            // Method 2: button with "Log in" text inside a modal/dialog/form
+            // Method 2: button with login-related text inside a modal/dialog/form
+            var loginTexts = ['log in', 'login', 'continue', 'sign in'];
             var containers = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], form, [class*="login"], [class*="Login"]');
             for (var c = 0; c < containers.length; c++) {
+                var ct = (containers[c].innerText || '').toLowerCase();
+                if (ct.indexOf('password') < 0 && ct.indexOf('username') < 0
+                    && ct.indexOf('email') < 0) continue;
                 var btns = containers[c].querySelectorAll('button');
                 for (var i = 0; i < btns.length; i++) {
                     var t = (btns[i].innerText || '').trim().toLowerCase();
-                    if ((t === 'log in' || t === 'login') && btns[i].offsetHeight > 0
-                        && btns[i].offsetWidth > 50) {
-                        return btns[i];
+                    for (var lt = 0; lt < loginTexts.length; lt++) {
+                        if (t === loginTexts[lt] && btns[i].offsetHeight > 0
+                            && btns[i].offsetWidth > 50) {
+                            return btns[i];
+                        }
                     }
                 }
             }
 
-            // Method 3: any visible button with "Log in" text (wider than 50px to skip small icons)
+            // Method 3: any visible button with login text (wider than 50px)
             var allBtns = document.querySelectorAll('button');
             for (var j = 0; j < allBtns.length; j++) {
                 var bt = (allBtns[j].innerText || '').trim().toLowerCase();
-                if ((bt === 'log in' || bt === 'login') && allBtns[j].offsetHeight > 0
-                    && allBtns[j].offsetWidth > 50) {
-                    return allBtns[j];
+                for (var lt2 = 0; lt2 < loginTexts.length; lt2++) {
+                    if (bt === loginTexts[lt2] && allBtns[j].offsetHeight > 0
+                        && allBtns[j].offsetWidth > 50) {
+                        return allBtns[j];
+                    }
                 }
             }
 
@@ -2525,45 +2533,68 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         elif "foryou" in current_url or "/following" in current_url:
             step("logged_in_redirect", f"Redirected to feed: {driver.current_url}")
 
-        # Now check if actually logged in by reloading /foryou
-        time.sleep(3)
-        driver.get("https://www.tiktok.com/foryou")
-        time.sleep(5)
-        body_after = driver.find_element(By.TAG_NAME, "body").text
-        snap(driver, "foryou_check")
+        # Check cookies first — session cookies indicate login before navigation
+        try:
+            cookies = driver.get_cookies()
+            cookie_names = [c["name"] for c in cookies]
+            session_cookies = [n for n in cookie_names if n in ("sessionid", "sid_tt", "uid_tt", "sid_guard", "passport_csrf_token")]
+            step("cookies_check", f"Session cookies: {session_cookies} | Total: {len(cookies)}")
 
-        # Check for login status via multiple signals
-        login_status = driver.execute_script("""
-            var result = {hasLoginBtn: false, hasAvatar: false, hasUpload: false, hasFollowing: false};
-            // Check header for "Log in" button
-            var els = document.querySelectorAll('button, a, div');
-            for (var i = 0; i < els.length; i++) {
-                var t = (els[i].innerText || '').trim();
-                if ((t === 'Log in' || t === 'Login') && els[i].offsetHeight > 0) {
-                    var rect = els[i].getBoundingClientRect();
-                    if (rect.top < 100) { result.hasLoginBtn = true; break; }
+            if "sessionid" in cookie_names or "sid_tt" in cookie_names:
+                _save_cookies(driver, username)
+                step("success", "LOGIN SUCCESS — session cookies found!")
+                driver.quit()
+                return {"ok": True, "steps": steps}
+        except Exception as e:
+            step("cookies_error", f"Cookie check failed: {type(e).__name__}: {e}")
+
+        # Try navigating to /foryou to confirm login status
+        try:
+            time.sleep(3)
+            driver.get("https://www.tiktok.com/foryou")
+            time.sleep(5)
+            snap(driver, "foryou_check")
+
+            login_status = driver.execute_script("""
+                var result = {hasLoginBtn: false, hasAvatar: false, hasUpload: false, hasFollowing: false};
+                var els = document.querySelectorAll('button, a, div');
+                for (var i = 0; i < els.length; i++) {
+                    var t = (els[i].innerText || '').trim();
+                    if ((t === 'Log in' || t === 'Login') && els[i].offsetHeight > 0) {
+                        var rect = els[i].getBoundingClientRect();
+                        if (rect.top < 100) { result.hasLoginBtn = true; break; }
+                    }
                 }
-            }
-            // Check for user avatar (logged-in indicator)
-            var avatar = document.querySelector('[data-e2e="profile-icon"], [class*="avatar"], img[class*="ImgAvatar"]');
-            if (avatar && avatar.offsetHeight > 0) result.hasAvatar = true;
-            // Check for upload button (only visible when logged in)
-            var upload = document.querySelector('[data-e2e="upload-icon"], a[href*="upload"]');
-            if (upload && upload.offsetHeight > 0) result.hasUpload = true;
-            // Check sidebar for Following count
-            var following = document.querySelector('[data-e2e="following-page"]');
-            if (following) result.hasFollowing = true;
-            return result;
-        """)
-        step("login_status", f"Status: {json.dumps(login_status)}")
+                var avatar = document.querySelector('[data-e2e="profile-icon"], [class*="avatar"], img[class*="ImgAvatar"]');
+                if (avatar && avatar.offsetHeight > 0) result.hasAvatar = true;
+                var upload = document.querySelector('[data-e2e="upload-icon"], a[href*="upload"]');
+                if (upload && upload.offsetHeight > 0) result.hasUpload = true;
+                var following = document.querySelector('[data-e2e="following-page"]');
+                if (following) result.hasFollowing = true;
+                return result;
+            """)
+            step("login_status", f"Status: {json.dumps(login_status)}")
 
-        has_login_btn = login_status.get("hasLoginBtn", True)
+            has_login_btn = login_status.get("hasLoginBtn", True)
 
-        if not has_login_btn:
-            _save_cookies(driver, username)
-            step("success", "LOGIN SUCCESS — Log in button gone!")
-            driver.quit()
-            return {"ok": True, "steps": steps}
+            if not has_login_btn:
+                _save_cookies(driver, username)
+                step("success", "LOGIN SUCCESS — Log in button gone!")
+                driver.quit()
+                return {"ok": True, "steps": steps}
+        except Exception as e:
+            step("foryou_error", f"Navigation to /foryou failed: {type(e).__name__}: {e}")
+            # Tab may have crashed — try to check cookies from current state
+            try:
+                cookies = driver.get_cookies()
+                cookie_names = [c["name"] for c in cookies]
+                if "sessionid" in cookie_names or "sid_tt" in cookie_names:
+                    _save_cookies(driver, username)
+                    step("success", "LOGIN SUCCESS — session cookies found after crash recovery!")
+                    driver.quit()
+                    return {"ok": True, "steps": steps}
+            except Exception:
+                pass
 
         # Login failed — check if verification needed
         body_after_lower = body_after.lower()
