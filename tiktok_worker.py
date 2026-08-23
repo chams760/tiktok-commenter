@@ -1472,15 +1472,67 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                     return {"ok": False, "steps": steps, "error": f"Chrome crashed: {e}"}
         _dismiss_cookie_banner(driver)
 
-        # Simulate human browsing: scroll, move mouse, wait
+        # Extended warmup: browse like a real user before login (25-40s)
+        # TikTok's server-side risk scoring checks behavior before login
+        step("warmup_start", "Starting realistic browsing warmup...")
+
+        # Phase 1: Initial scroll through feed (8-12s)
         _random_mouse_move(driver, random.randint(2, 4))
-        driver.execute_script("window.scrollBy(0, arguments[0])", random.randint(200, 500))
-        time.sleep(random.uniform(1.5, 3.0))
-        driver.execute_script("window.scrollBy(0, arguments[0])", random.randint(-100, 300))
-        _random_mouse_move(driver, random.randint(1, 3))
-        time.sleep(random.uniform(2.0, 4.0))
+        time.sleep(random.uniform(1.5, 2.5))
+        for _ in range(random.randint(3, 5)):
+            driver.execute_script("window.scrollBy(0, arguments[0])", random.randint(300, 700))
+            time.sleep(random.uniform(1.5, 3.0))
+            _random_mouse_move(driver, random.randint(1, 2))
+
+        # Phase 2: Click on a video and "watch" it (5-10s)
+        try:
+            watched = driver.execute_script("""
+                var videos = document.querySelectorAll('[data-e2e="recommend-list-item-container"] a, a[href*="/video/"], [class*="DivItemContainer"] a');
+                for (var i = 0; i < videos.length; i++) {
+                    if (videos[i].offsetHeight > 0 && videos[i].href) {
+                        videos[i].click();
+                        return videos[i].href.substring(0, 60);
+                    }
+                }
+                return null;
+            """)
+            if watched:
+                time.sleep(random.uniform(4, 8))
+                _random_mouse_move(driver, random.randint(1, 3))
+                driver.back()
+                time.sleep(random.uniform(2, 3))
+        except Exception:
+            pass
+
+        # Phase 3: More scrolling (5-8s)
+        _dismiss_cookie_banner(driver)
         driver.execute_script("window.scrollTo(0, 0)")
         time.sleep(random.uniform(1.0, 2.0))
+        for _ in range(random.randint(2, 4)):
+            driver.execute_script("window.scrollBy(0, arguments[0])", random.randint(200, 600))
+            time.sleep(random.uniform(1.5, 2.5))
+            _random_mouse_move(driver, random.randint(1, 2))
+
+        # Phase 4: Hover over sidebar items (2-4s)
+        try:
+            driver.execute_script("""
+                var sidebar = document.querySelectorAll('nav a, [data-e2e="nav-explore"], [data-e2e="nav-following"]');
+                for (var i = 0; i < Math.min(sidebar.length, 3); i++) {
+                    if (sidebar[i].offsetHeight > 0) {
+                        var r = sidebar[i].getBoundingClientRect();
+                        var ev = new MouseEvent('mouseover', {bubbles:true, clientX:r.left+r.width/2, clientY:r.top+r.height/2});
+                        sidebar[i].dispatchEvent(ev);
+                    }
+                }
+            """)
+            time.sleep(random.uniform(1.5, 3.0))
+        except Exception:
+            pass
+
+        # Scroll back to top before login
+        driver.execute_script("window.scrollTo(0, 0)")
+        time.sleep(random.uniform(1.0, 2.0))
+        _random_mouse_move(driver, random.randint(1, 2))
 
         step("homepage", f"Homepage visited. Src: {len(driver.page_source)}b")
 
@@ -2358,6 +2410,35 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             """)
             step("verify_code_state", f"Code state: {json.dumps(code_state)[:500]}")
 
+            # Wait for Resend code timer, then click Resend (first send often blocked)
+            step("waiting_resend", "Waiting 60s for Resend code timer...")
+            time.sleep(62)
+            try:
+                resend_result = driver.execute_script("""
+                    var els = document.querySelectorAll('div, span, a, button, p');
+                    for (var i = 0; i < els.length; i++) {
+                        var t = (els[i].innerText || '').trim().toLowerCase();
+                        if ((t === 'resend code' || t === 'resend' || t === 'resend code ')
+                            && els[i].offsetHeight > 0 && els[i].offsetWidth > 20) {
+                            var r = els[i].getBoundingClientRect();
+                            var opts = {bubbles:true, cancelable:true, view:window,
+                                clientX: r.left + r.width/2, clientY: r.top + r.height/2};
+                            els[i].dispatchEvent(new PointerEvent('pointerdown', opts));
+                            els[i].dispatchEvent(new MouseEvent('mousedown', opts));
+                            els[i].dispatchEvent(new PointerEvent('pointerup', opts));
+                            els[i].dispatchEvent(new MouseEvent('mouseup', opts));
+                            els[i].dispatchEvent(new MouseEvent('click', opts));
+                            return 'clicked:' + t;
+                        }
+                    }
+                    return 'not_found';
+                """)
+                step("resend_code", f"Resend: {resend_result}")
+            except Exception as e:
+                step("resend_error", f"Resend failed: {type(e).__name__}")
+
+            time.sleep(10)
+
             # Save browser session for manual code entry via /api/submit-code
             _pending_browser_sessions[username] = {
                 "driver": driver, "steps": steps, "snap": snap,
@@ -2928,7 +3009,7 @@ async def browser_fetch_login(username: str, password: str, proxy: str = "",
             loop.run_in_executor(
                 _executor, _browser_fetch_login_sync, username, password, proxy, email_password, imap_server
             ),
-            timeout=120
+            timeout=300
         )
     except asyncio.TimeoutError:
         return {"ok": False, "steps": [{"step": "timeout", "note": "Login timed out after 120s"}],
