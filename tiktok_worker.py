@@ -3633,56 +3633,68 @@ def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: s
 
         logger.info(f"Comment text entered: '{entered[:50]}'")
 
-        # Step 5: Click post button
-        post_result = driver.execute_script("""
+        # Step 5: Find post button and click with real mouse event
+        post_btn_el = driver.execute_script("""
             // data-e2e post button
             var btn = document.querySelector('[data-e2e="comment-post"]');
-            if (btn && btn.offsetHeight > 0) { btn.click(); return 'data-e2e'; }
+            if (btn && btn.offsetHeight > 0) return btn;
 
-            // Any visible enabled button/div with "Post" text near comment area
-            var commentArea = document.querySelector('[data-e2e="comment-input"], [class*="CommentInput"], [class*="comment-input"], [class*="BottomComment"], [class*="bottom-comment"]');
-            if (commentArea) {
-                var btns = commentArea.querySelectorAll('button, div[role="button"], span[role="button"]');
+            // Button/div with "Post" text near comment area
+            var areas = document.querySelectorAll(
+                '[data-e2e="comment-input"], [class*="CommentInput"], [class*="comment-input"], ' +
+                '[class*="BottomComment"], [class*="bottom-comment"], [class*="CommentContainer"]'
+            );
+            for (var a = 0; a < areas.length; a++) {
+                var btns = areas[a].querySelectorAll('button, div[role="button"], span[role="button"], div[class*="Post"], div[class*="post"]');
                 for (var i = 0; i < btns.length; i++) {
                     var t = (btns[i].innerText || btns[i].getAttribute('aria-label') || '').trim().toLowerCase();
-                    if ((t === 'post' || t === 'send') && btns[i].offsetHeight > 0) {
-                        btns[i].click();
-                        return 'area:' + t;
-                    }
+                    if ((t === 'post' || t === 'send') && btns[i].offsetHeight > 0) return btns[i];
                 }
             }
 
-            // Global search for Post button
-            var allBtns = document.querySelectorAll('button, div[role="button"]');
-            for (var j = 0; j < allBtns.length; j++) {
-                if (allBtns[j].offsetHeight === 0) continue;
-                var txt = (allBtns[j].innerText || '').trim().toLowerCase();
-                if (txt === 'post') {
-                    allBtns[j].click();
-                    return 'global:post';
+            // Global: any visible element with exact text "Post"
+            var allEls = document.querySelectorAll('button, div[role="button"], div, span');
+            for (var j = 0; j < allEls.length; j++) {
+                if (allEls[j].offsetHeight === 0 || allEls[j].offsetWidth === 0) continue;
+                var txt = (allEls[j].innerText || '').trim();
+                if (txt === 'Post' || txt === 'post' || txt === 'Send' || txt === 'send') {
+                    // Make sure it's a leaf-level element (not a container with other text)
+                    if (txt.length <= 5) return allEls[j];
                 }
             }
 
-            // Cursor-pointer div with "Post" inside comment section
-            var allEls = document.querySelectorAll('div, span');
-            for (var k = 0; k < allEls.length; k++) {
-                var el = allEls[k];
-                if (el.offsetHeight === 0) continue;
-                var elText = (el.innerText || '').trim();
-                if (elText === 'Post' && window.getComputedStyle(el).cursor === 'pointer') {
-                    el.click();
-                    return 'cursor:Post';
-                }
-            }
-
-            return 'not_found';
+            return null;
         """)
+
+        post_result = 'not_found'
+        if post_btn_el:
+            # Click with ActionChains (real mouse click, not JS .click())
+            try:
+                ActionChains(driver).move_to_element(post_btn_el).pause(0.3).click().perform()
+                post_result = 'actionchains'
+            except Exception:
+                try:
+                    post_btn_el.click()
+                    post_result = 'element_click'
+                except Exception:
+                    try:
+                        driver.execute_script("""
+                            var el = arguments[0];
+                            el.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}));
+                            el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+                            el.dispatchEvent(new PointerEvent('pointerup', {bubbles: true}));
+                            el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+                            el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                        """, post_btn_el)
+                        post_result = 'react_dispatch'
+                    except Exception:
+                        post_result = 'all_failed'
 
         if post_result == 'not_found':
             snap(driver, "no_post_btn")
             return False, "no_post_button"
 
-        logger.info(f"Post button clicked: {post_btn_result}")
+        logger.info(f"Post button clicked: {post_result}")
         _human_delay(3, 5)
 
         # Check for errors (rate limit, blocked, etc.)
