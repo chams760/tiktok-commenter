@@ -3086,34 +3086,9 @@ def _browser_enter_code_ui(driver, username: str, code: str, steps: list) -> dic
         logger.info(f"BrowserCode [{name}]: {note}")
 
     try:
-        code_inputs = driver.find_elements(By.CSS_SELECTOR, 'input[type="text"], input[type="number"], input[type="tel"]')
-        code_inputs = [inp for inp in code_inputs if inp.is_displayed() and inp.get_attribute("name") != "username"]
-
-        if not code_inputs:
-            code_inputs = driver.find_elements(By.CSS_SELECTOR, 'input')
-            code_inputs = [inp for inp in code_inputs if inp.is_displayed()
-                          and inp.get_attribute("type") not in ("password", "hidden")]
-
-        if not code_inputs:
-            step("no_input", "No code input field found")
-            driver.quit()
-            return {"ok": False, "steps": steps, "error": "No code input field found"}
-
-        step("inputs_found", f"Found {len(code_inputs)} input fields")
-
-        if len(code_inputs) == 1:
-            code_inputs[0].clear()
-            _human_type(code_inputs[0], code)
-        elif len(code_inputs) >= 4:
-            for i, digit in enumerate(code):
-                if i < len(code_inputs):
-                    code_inputs[i].send_keys(digit)
-                    _human_delay(0.05, 0.15)
-        else:
-            code_inputs[0].clear()
-            _human_type(code_inputs[0], code)
-
-        step("code_entered", f"Code {code} entered into UI")
+        # Use React-compatible nativeSetter to enter code (same as _enter_verification_code)
+        entry_result = _enter_verification_code(driver, code)
+        step("code_entered", f"Code {code} entered via React nativeSetter: {entry_result}")
         _human_delay(1, 2)
 
         # Try clicking verify/submit button — must be inside the verification dialog, NOT the main login form
@@ -3150,10 +3125,13 @@ def _browser_enter_code_ui(driver, username: str, code: str, steps: list) -> dic
                 return 'no_button';
             """)
             step("verify_btn", f"Verify button: {verify_btn}")
-        except Exception:
-            from selenium.webdriver.common.keys import Keys
-            code_inputs[-1].send_keys(Keys.ENTER)
-            step("verify_btn", "Pressed Enter as fallback")
+        except Exception as e:
+            step("verify_btn", f"Button search failed: {e}, pressing Enter")
+            try:
+                from selenium.webdriver.common.keys import Keys
+                driver.switch_to.active_element.send_keys(Keys.ENTER)
+            except Exception:
+                pass
 
         _human_delay(5, 8)
 
@@ -3163,6 +3141,21 @@ def _browser_enter_code_ui(driver, username: str, code: str, steps: list) -> dic
             driver.save_screenshot(path)
         except Exception:
             pass
+
+        # Log page state after clicking verify
+        try:
+            after_state = driver.execute_script("""
+                var dialogs = [];
+                var els = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="dialog"], [class*="Dialog"], [class*="verify"], [class*="Verify"]');
+                for (var i = 0; i < els.length; i++) {
+                    var t = (els[i].innerText || '').trim();
+                    if (t.length > 0 && t.length < 500) dialogs.push(t.substring(0, 200));
+                }
+                return JSON.stringify({url: window.location.href, dialogs: dialogs});
+            """)
+            step("after_verify_state", f"State after code submit: {after_state}")
+        except Exception as e:
+            step("after_verify_state", f"Failed to get state: {e}")
 
         # Check for wrong code first
         try:
