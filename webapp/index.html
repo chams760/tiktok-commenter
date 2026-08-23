@@ -556,7 +556,7 @@ function renderTasks(tasks) {
     const show = tasks.slice(0, 10);
     el.innerHTML = show.map(t => {
         const pct = t.max_comments > 0 ? Math.round(t.comments_done / t.max_comments * 100) : 0;
-        const statusMap = { pending: ['Pending', 'badge-warn'], running: ['Running', 'badge-ok'], done: ['Done', ''], cancelled: ['Cancelled', 'badge-err'], paused_no_accounts: ['No accounts', 'badge-warn'] };
+        const statusMap = { pending: ['Pending', 'badge-warn'], running: ['Running', 'badge-ok'], done: ['Done', ''], cancelled: ['Cancelled', 'badge-err'], paused_no_accounts: ['No accounts', 'badge-warn'], paused_rate_limit: ['Rate limited', 'badge-err'], error: ['Error', 'badge-err'] };
         const [label, cls] = statusMap[t.status] || [t.status, ''];
         const cancelBtn = (t.status === 'running' || t.status === 'pending')
             ? `<button class="task-cancel" onclick="cancelTask(${t.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`

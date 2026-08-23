@@ -3277,81 +3277,57 @@ async def browser_submit_manual_code(username: str, code: str) -> dict:
     return await loop.run_in_executor(_executor, _browser_submit_manual_code_sync, username, code)
 
 
-def _login_account_sync(driver: webdriver.Chrome, username: str, password: str) -> bool:
-    import time
-
+def _restore_session_sync(driver: webdriver.Chrome, username: str) -> bool:
+    """Load saved cookies and verify the session is alive."""
     has_cookies = _load_cookies(driver, username)
-    if has_cookies:
-        driver.get("https://www.tiktok.com/foryou")
-        time.sleep(random.uniform(3, 5))
-        if "login" not in driver.current_url.lower():
-            logger.info(f"Вход через cookies: {username}")
-            return True
-        logger.info(f"Cookies устарели для {username}")
-
-    driver.get("https://www.tiktok.com")
-    time.sleep(random.uniform(2, 4))
-
-    driver.get("https://www.tiktok.com/login/phone-or-email/email")
-    time.sleep(random.uniform(3, 5))
-    _dismiss_cookie_banner(driver)
-    _random_mouse_move(driver, 3)
-
-    try:
-        email_input = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="username"]'))
-        )
-        _random_mouse_move(driver, 2)
-        ActionChains(driver).move_to_element(email_input).click().perform()
-        _human_delay(0.3, 0.6)
-        _human_type(email_input, username)
-
-        pass_input = driver.find_element(By.CSS_SELECTOR, 'input[type="password"]')
-        _random_mouse_move(driver, 1)
-        ActionChains(driver).move_to_element(pass_input).click().perform()
-        _human_delay(0.3, 0.6)
-        _human_type(pass_input, password)
-
-        _random_mouse_move(driver, 2)
-        _human_delay(0.5, 1.2)
-
-        login_btn = driver.find_element(By.CSS_SELECTOR, 'button[data-e2e="login-button"]')
-        try:
-            ActionChains(driver).move_to_element(login_btn).click().perform()
-        except Exception:
-            driver.execute_script("arguments[0].click()", login_btn)
-
-        time.sleep(random.uniform(5, 8))
-
-        if "login" not in driver.current_url.lower():
-            logger.info(f"Вход выполнен: {username}")
-            _save_cookies(driver, username)
-            return True
-
-        body_text = driver.find_element(By.TAG_NAME, "body").text
-        body_lower_rl = body_text.lower()
-        if any(p in body_lower_rl for p in ["maximum number", "too many attempts", "try again later"]):
-            logger.error(f"Rate limit для {username}")
-        else:
-            logger.warning(f"Не удалось войти: {username}")
+    if not has_cookies:
+        logger.warning(f"No saved cookies for {username}")
         return False
 
-    except Exception as e:
-        logger.error(f"Ошибка входа {username}: {e}")
+    driver.get("https://www.tiktok.com/foryou")
+    time.sleep(random.uniform(4, 6))
+
+    cookies = driver.get_cookies()
+    cookie_names = [c["name"] for c in cookies]
+    if "sessionid" not in cookie_names and "sid_tt" not in cookie_names:
+        logger.warning(f"Cookies expired for {username} — no session cookies")
         return False
+
+    has_login_btn = driver.execute_script("""
+        var els = document.querySelectorAll('button, a, div');
+        for (var i = 0; i < els.length; i++) {
+            var t = (els[i].innerText || '').trim();
+            if ((t === 'Log in' || t === 'Login') && els[i].offsetHeight > 0) {
+                var rect = els[i].getBoundingClientRect();
+                if (rect.top < 100) return true;
+            }
+        }
+        return false;
+    """)
+    if has_login_btn:
+        logger.warning(f"Cookies invalid for {username} — login button visible")
+        return False
+
+    logger.info(f"Session restored for {username}")
+    _save_cookies(driver, username)
+    return True
 
 
 def _search_videos_sync(driver: webdriver.Chrome, query: str, max_results: int = 50) -> list[str]:
-    import time
+    from urllib.parse import quote
     urls = []
     try:
-        driver.get(f"https://www.tiktok.com/search/video?q={query}")
-        time.sleep(4)
+        search_url = f"https://www.tiktok.com/search/video?q={quote(query)}"
+        driver.get(search_url)
+        time.sleep(random.uniform(4, 6))
+        _dismiss_cookie_banner(driver)
 
-        scroll_count = max(max_results // 10, 3)
-        for _ in range(scroll_count):
+        scroll_count = max(max_results // 5, 3)
+        for i in range(scroll_count):
             driver.execute_script("window.scrollBy(0, window.innerHeight)")
             time.sleep(random.uniform(1.5, 3.0))
+            if i % 3 == 2:
+                _random_mouse_move(driver, 1)
 
         links = driver.find_elements(By.CSS_SELECTOR, 'a[href*="/video/"]')
         seen = set()
@@ -3365,142 +3341,258 @@ def _search_videos_sync(driver: webdriver.Chrome, query: str, max_results: int =
                 if len(urls) >= max_results:
                     break
 
-        logger.info(f"Найдено {len(urls)} видео по запросу '{query}'")
+        logger.info(f"Found {len(urls)} videos for '{query}'")
     except Exception as e:
-        logger.error(f"Ошибка поиска: {e}")
+        logger.error(f"Search error: {e}")
     return urls
 
 
-def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: str) -> bool:
-    import time
+def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: str) -> tuple[bool, str]:
+    """Navigate to video and post a comment. Returns (success, detail)."""
     try:
         driver.get(video_url)
-        time.sleep(random.uniform(3, 5))
+        time.sleep(random.uniform(4, 7))
+        _dismiss_cookie_banner(driver)
 
-        comment_box = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, 'div[data-e2e="comment-input"] div[contenteditable="true"]'))
-        )
-        ActionChains(driver).move_to_element(comment_box).click().perform()
-        time.sleep(0.5)
-        comment_box.send_keys(comment_text)
-        time.sleep(1)
+        # Scroll down a bit to look human
+        driver.execute_script("window.scrollBy(0, 200)")
+        _human_delay(1, 2)
+        _random_mouse_move(driver, 2)
 
-        post_btn = driver.find_element(By.CSS_SELECTOR, 'div[data-e2e="comment-post"]')
-        ActionChains(driver).move_to_element(post_btn).click().perform()
-        time.sleep(3)
+        # Find comment input — try multiple selectors
+        comment_box = None
+        selectors = [
+            'div[data-e2e="comment-input"] div[contenteditable="true"]',
+            'div[contenteditable="true"][data-placeholder]',
+            'div[class*="DraftEditor"] div[contenteditable="true"]',
+            'div[contenteditable="true"]',
+        ]
+        for sel in selectors:
+            try:
+                els = driver.find_elements(By.CSS_SELECTOR, sel)
+                for el in els:
+                    if el.is_displayed():
+                        ph = (el.get_attribute("data-placeholder") or "").lower()
+                        parent_text = driver.execute_script(
+                            "return arguments[0].closest('[class*=\"comment\"], [class*=\"Comment\"], [data-e2e*=\"comment\"]') ? true : false",
+                            el
+                        )
+                        if "comment" in ph or "add comment" in ph or parent_text:
+                            comment_box = el
+                            break
+                        if not comment_box:
+                            comment_box = el
+                if comment_box:
+                    break
+            except Exception:
+                continue
 
-        logger.info(f"Комментарий отправлен: {video_url}")
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка комментария на {video_url}: {e}")
-        return False
+        if not comment_box:
+            snap(driver, "no_comment_box")
+            return False, "no_comment_input"
 
-
-def _run_task_sync(task_id: int, task: dict):
-    import time
-
-    probe_driver = _create_driver()
-    try:
-        video_urls = _search_videos_sync(probe_driver, task["search_query"], task["max_comments"])
-    finally:
+        # Click on comment box
         try:
-            probe_driver.quit()
+            ActionChains(driver).move_to_element(comment_box).click().perform()
+        except Exception:
+            driver.execute_script("arguments[0].click()", comment_box)
+        _human_delay(0.5, 1.0)
+
+        # Type comment using JS (React-compatible)
+        driver.execute_script("""
+            var el = arguments[0];
+            var text = arguments[1];
+            el.focus();
+            el.textContent = '';
+            // Use execCommand for contenteditable divs
+            document.execCommand('insertText', false, text);
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+            el.dispatchEvent(new Event('change', {bubbles: true}));
+        """, comment_box, comment_text)
+        _human_delay(1, 2)
+
+        # Verify text was entered
+        entered_text = driver.execute_script("return arguments[0].textContent || arguments[0].innerText || ''", comment_box)
+        if not entered_text.strip():
+            # Fallback: type character by character
+            comment_box.clear()
+            for ch in comment_text:
+                comment_box.send_keys(ch)
+                _human_delay(0.02, 0.08)
+            _human_delay(0.5, 1)
+            entered_text = driver.execute_script("return arguments[0].textContent || ''", comment_box)
+            if not entered_text.strip():
+                snap(driver, "comment_text_empty")
+                return False, "text_entry_failed"
+
+        # Find and click post button
+        post_btn_result = driver.execute_script("""
+            // Method 1: data-e2e
+            var btn = document.querySelector('[data-e2e="comment-post"]');
+            if (btn && btn.offsetHeight > 0) { btn.click(); return 'data-e2e'; }
+
+            // Method 2: button/div near comment input with post/send text or icon
+            var btns = document.querySelectorAll('button, div[role="button"], div[class*="post"], div[class*="Post"], div[class*="send"], div[class*="Send"]');
+            for (var i = 0; i < btns.length; i++) {
+                if (btns[i].offsetHeight === 0) continue;
+                var t = (btns[i].innerText || btns[i].getAttribute('aria-label') || '').trim().toLowerCase();
+                if (t === 'post' || t === 'send' || t === 'отправить') {
+                    btns[i].click();
+                    return 'text:' + t;
+                }
+            }
+
+            // Method 3: SVG send icon button near comment area
+            var svgBtns = document.querySelectorAll('[data-e2e*="comment"] button, [class*="comment"] button, [class*="Comment"] button');
+            for (var j = 0; j < svgBtns.length; j++) {
+                if (svgBtns[j].offsetHeight > 0 && svgBtns[j].querySelector('svg')) {
+                    svgBtns[j].click();
+                    return 'svg_btn';
+                }
+            }
+
+            return 'not_found';
+        """)
+
+        if post_btn_result == 'not_found':
+            snap(driver, "no_post_btn")
+            return False, "no_post_button"
+
+        logger.info(f"Post button clicked: {post_btn_result}")
+        _human_delay(3, 5)
+
+        # Check for errors (rate limit, blocked, etc.)
+        error_text = driver.execute_script("""
+            var errSels = '[class*="toast"], [class*="Toast"], [class*="snack"], [class*="Snack"], [class*="notification"], [class*="error"], [class*="Error"]';
+            var els = document.querySelectorAll(errSels);
+            for (var i = 0; i < els.length; i++) {
+                var t = (els[i].innerText || '').trim();
+                if (t.length > 2 && t.length < 300 && els[i].offsetHeight > 0) return t;
+            }
+            return '';
+        """)
+
+        if error_text:
+            err_lower = error_text.lower()
+            if any(w in err_lower for w in ["too fast", "too many", "rate", "limit", "blocked", "restricted", "muted"]):
+                logger.warning(f"Comment rate limited: {error_text}")
+                return False, f"rate_limited: {error_text[:100]}"
+            logger.warning(f"Comment error toast: {error_text}")
+
+        logger.info(f"Comment posted: {video_url}")
+        return True, "ok"
+    except Exception as e:
+        logger.error(f"Comment error on {video_url}: {e}")
+        try:
+            snap(driver, "comment_exception")
         except Exception:
             pass
-
-    return video_urls
+        return False, str(e)
 
 
 async def run_task(task_id: int):
     task = await db.get_task(task_id)
     if not task:
-        logger.error(f"Задача {task_id} не найдена")
+        logger.error(f"Task {task_id} not found")
         return
 
     await db.update_task(task_id, status="running")
-    logger.info(f"Запуск задачи #{task_id}: запрос='{task['search_query']}', лимит={task['max_comments']}")
+    logger.info(f"Starting task #{task_id}: query='{task['search_query']}', limit={task['max_comments']}")
 
     loop = asyncio.get_event_loop()
     comments_done = task["comments_done"]
     comments_failed = task["comments_failed"]
 
     try:
-        video_urls = await loop.run_in_executor(_executor, _run_task_sync, task_id, task)
+        # Get available account
+        account = await db.get_available_account(config.MAX_COMMENTS_PER_ACCOUNT)
+        if not account:
+            logger.warning("No available accounts")
+            await db.update_task(task_id, status="paused_no_accounts")
+            return
+
+        proxy_str = account.get("proxy", "")
+
+        def _task_worker():
+            driver = _create_driver(proxy_str)
+            _active_drivers[task_id] = driver
+            try:
+                # Restore session from cookies
+                logged_in = _restore_session_sync(driver, account["username"])
+                if not logged_in:
+                    return [], "login_failed"
+
+                # Search for videos
+                video_urls = _search_videos_sync(driver, task["search_query"], task["max_comments"] * 2)
+                return video_urls, "ok"
+            except Exception as e:
+                logger.error(f"Task worker setup error: {e}")
+                return [], str(e)
+
+        video_urls, setup_status = await loop.run_in_executor(_executor, _task_worker)
+
+        if setup_status == "login_failed":
+            await db.set_account_status(account["id"], "login_failed")
+            await db.update_task(task_id, status="error", finished_at=datetime.now(timezone.utc).isoformat())
+            logger.error(f"Task #{task_id}: login failed for {account['username']}")
+            return
 
         if not video_urls:
-            logger.warning("Видео не найдены")
+            logger.warning(f"Task #{task_id}: no videos found")
             await db.update_task(task_id, status="done", finished_at=datetime.now(timezone.utc).isoformat())
             return
 
+        logger.info(f"Task #{task_id}: found {len(video_urls)} videos, commenting...")
+
+        # Comment on videos using the same browser session
         for video_url in video_urls:
             if comments_done >= task["max_comments"]:
                 break
 
             task_check = await db.get_task(task_id)
             if task_check and task_check["status"] == "cancelled":
-                logger.info(f"Задача #{task_id} отменена")
-                return
+                logger.info(f"Task #{task_id} cancelled")
+                break
 
-            account = await db.get_available_account(config.MAX_COMMENTS_PER_ACCOUNT)
-            if not account:
-                logger.warning("Нет доступных аккаунтов")
-                await db.update_task(task_id, status="paused_no_accounts")
-                return
+            def _do_comment(url=video_url):
+                driver = _active_drivers.get(task_id)
+                if not driver:
+                    return False, "no_driver"
+                return _post_comment_sync(driver, url, task["comment_text"])
 
-            proxy_str = account.get("proxy", "")
+            success, detail = await loop.run_in_executor(_executor, _do_comment)
 
-            def _do_comment():
-                driver = _create_driver(proxy_str)
-                _active_drivers[task_id] = driver
-                try:
-                    logged_in = _login_account_sync(driver, account["username"], account["password"])
-                    if not logged_in:
-                        try:
-                            err_path = os.path.join(SCREENSHOTS_DIR, f"login_fail_{account['id']}_{int(datetime.now(timezone.utc).timestamp())}.png")
-                            driver.save_screenshot(err_path)
-                        except Exception:
-                            pass
-                        return False, "login_failed"
-
-                    success = _post_comment_sync(driver, video_url, task["comment_text"])
-                    if not success:
-                        try:
-                            err_path = os.path.join(SCREENSHOTS_DIR, f"comment_fail_{int(datetime.now(timezone.utc).timestamp())}.png")
-                            driver.save_screenshot(err_path)
-                        except Exception:
-                            pass
-                    return success, "ok" if success else "comment_failed"
-                finally:
-                    _active_drivers.pop(task_id, None)
-                    try:
-                        driver.quit()
-                    except Exception:
-                        pass
-
-            success, status = await loop.run_in_executor(_executor, _do_comment)
-
-            if status == "login_failed":
-                await db.set_account_status(account["id"], "login_failed")
-                await db.log_comment(task_id, account["id"], video_url, "error", "login_failed")
-                comments_failed += 1
-            elif success:
+            if success:
                 comments_done += 1
                 await db.increment_account_comments(account["id"])
                 await db.log_comment(task_id, account["id"], video_url, "ok")
+                logger.info(f"Task #{task_id}: comment {comments_done}/{task['max_comments']} OK")
             else:
                 comments_failed += 1
-                await db.log_comment(task_id, account["id"], video_url, "error", "comment_failed")
+                await db.log_comment(task_id, account["id"], video_url, "error", detail)
+                logger.warning(f"Task #{task_id}: comment failed — {detail}")
+
+                if "rate_limited" in detail:
+                    logger.warning(f"Task #{task_id}: rate limited, pausing")
+                    await db.update_task(task_id, status="paused_rate_limit",
+                                        comments_done=comments_done, comments_failed=comments_failed)
+                    return
 
             await db.update_task(task_id, comments_done=comments_done, comments_failed=comments_failed)
 
             delay = random.uniform(config.DELAY_MIN, config.DELAY_MAX)
-            logger.info(f"Задержка {delay:.0f}с перед следующим комментарием")
+            logger.info(f"Task #{task_id}: waiting {delay:.0f}s")
             await asyncio.sleep(delay)
 
     except Exception as e:
-        logger.error(f"Критическая ошибка задачи #{task_id}: {e}")
+        logger.error(f"Critical error in task #{task_id}: {e}")
     finally:
-        _active_drivers.pop(task_id, None)
+        driver = _active_drivers.pop(task_id, None)
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
         await db.update_task(
             task_id,
             status="done",
@@ -3508,4 +3600,4 @@ async def run_task(task_id: int):
             comments_failed=comments_failed,
             finished_at=datetime.now(timezone.utc).isoformat(),
         )
-        logger.info(f"Задача #{task_id} завершена: отправлено={comments_done}, ошибок={comments_failed}")
+        logger.info(f"Task #{task_id} finished: sent={comments_done}, errors={comments_failed}")
