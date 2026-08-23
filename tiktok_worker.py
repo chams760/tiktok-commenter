@@ -2409,7 +2409,8 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
 
             step("verify_waiting", "Verification code needed. Enter code via bot.")
             return {"ok": False, "steps": steps, "error": "VERIFICATION_NEEDED",
-                    "verify": True, "needs_code": True}
+                    "verify": True, "needs_code": True, "need_code": True,
+                    "username": username}
 
         # Check for REAL captcha UI (not just word in JS code)
         has_captcha = driver.execute_script("""
