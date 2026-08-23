@@ -721,7 +721,18 @@ def _ensure_xvfb():
         os.environ.pop("DISPLAY", None)
 
 
+def _kill_stale_chrome():
+    """Kill leftover Chrome/chromedriver processes to free memory."""
+    import subprocess
+    for proc in ["chrome", "chromedriver"]:
+        try:
+            subprocess.run(["pkill", "-f", proc], capture_output=True, timeout=5)
+        except Exception:
+            pass
+
+
 def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
+    _kill_stale_chrome()
     _ensure_xvfb()
     has_display = "DISPLAY" in os.environ
 
@@ -739,12 +750,15 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
     options.add_argument("--no-first-run")
     options.add_argument("--disable-backgrounding-occluded-windows")
     options.add_argument("--disable-renderer-backgrounding")
-    options.add_argument("--js-flags=--max-old-space-size=256")
+    options.add_argument("--js-flags=--max-old-space-size=128")
     options.add_argument("--disable-component-update")
     options.add_argument("--disable-domain-reliability")
-    options.add_argument("--disable-features=TranslateUI,BlinkGenPropertyTrees")
-    options.add_argument("--single-process")
+    options.add_argument("--disable-features=TranslateUI,BlinkGenPropertyTrees,MediaRouter,CalculateNativeWinOcclusion")
     options.add_argument("--disable-site-isolation-trials")
+    options.add_argument("--disable-ipc-flooding-protection")
+    options.add_argument("--disable-hang-monitor")
+    options.add_argument("--renderer-process-limit=1")
+    options.add_argument("--memory-pressure-off")
     _w = random.choice([1366, 1440, 1536])
     _h = random.choice([768, 900, 864])
     options.add_argument(f"--window-size={_w},{_h}")
