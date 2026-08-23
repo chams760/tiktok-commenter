@@ -2273,6 +2273,52 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                     step("sms_no_number", "Could not get SMS number from API")
 
             # ── Email verification flow (fallback or primary) ──
+            # Intercept verify/send-code API calls to see server response
+            driver.execute_script("""
+                window.__verifyRequests = [];
+                var origFetch = window.fetch;
+                window.fetch = function(url, opts) {
+                    var urlStr = typeof url === 'string' ? url : (url.url || '');
+                    var isVerify = urlStr.indexOf('verify') >= 0 || urlStr.indexOf('send_code') >= 0
+                        || urlStr.indexOf('send-code') >= 0 || urlStr.indexOf('idv') >= 0
+                        || urlStr.indexOf('passport') >= 0 || urlStr.indexOf('challenge') >= 0;
+                    if (isVerify) {
+                        window.__verifyRequests.push({type:'fetch', url: urlStr.substring(0,200),
+                            method: (opts||{}).method||'GET', time: Date.now()});
+                    }
+                    return origFetch.apply(this, arguments).then(function(resp) {
+                        if (isVerify) {
+                            resp.clone().text().then(function(t) {
+                                window.__verifyRequests.push({type:'fetch_resp', url: urlStr.substring(0,200),
+                                    status: resp.status, body: t.substring(0, 500)});
+                            });
+                        }
+                        return resp;
+                    });
+                };
+                var origXhr = XMLHttpRequest.prototype.open;
+                var origSend = XMLHttpRequest.prototype.send;
+                XMLHttpRequest.prototype.open = function(m, url) {
+                    this.__url = url; this.__method = m;
+                    return origXhr.apply(this, arguments);
+                };
+                XMLHttpRequest.prototype.send = function(body) {
+                    var self = this;
+                    var u = self.__url || '';
+                    var isV = u.indexOf('verify') >= 0 || u.indexOf('send_code') >= 0
+                        || u.indexOf('idv') >= 0 || u.indexOf('passport') >= 0;
+                    if (isV) {
+                        window.__verifyRequests.push({type:'xhr', url: u.substring(0,200),
+                            method: self.__method, time: Date.now()});
+                        self.addEventListener('load', function() {
+                            window.__verifyRequests.push({type:'xhr_resp', url: u.substring(0,200),
+                                status: self.status, body: (self.responseText||'').substring(0,500)});
+                        });
+                    }
+                    return origSend.apply(this, arguments);
+                };
+            """)
+
             # Click "Email" option in verification dialog
             email_row_el = None
             try:
@@ -2563,6 +2609,16 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                         bodySnippet: bodyText.substring(0, 300)};
             """)
             step("verify_code_state", f"Code state: {json.dumps(code_state)[:500]}")
+
+            # Read intercepted verify API responses
+            try:
+                verify_api = driver.execute_script("return window.__verifyRequests || [];")
+                if verify_api:
+                    step("verify_api_calls", f"API: {json.dumps(verify_api)[:800]}")
+                else:
+                    step("verify_api_calls", "No verify API calls intercepted")
+            except Exception:
+                pass
 
             # Save browser session for manual code entry via /api/submit-code
             _pending_browser_sessions[username] = {
