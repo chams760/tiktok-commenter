@@ -924,7 +924,10 @@ def _test_login_sync(username: str, password: str, proxy: str = "", email_passwo
             snap(driver, "no_login_btn", "Login button not found")
             return steps
 
-        ActionChains(driver).move_to_element(login_btn).click().perform()
+        try:
+            ActionChains(driver).move_to_element(login_btn).click().perform()
+        except Exception:
+            driver.execute_script("arguments[0].click()", login_btn)
         _human_delay(3, 5)
         _dismiss_cookie_banner(driver)
         snap(driver, "after_click", "After clicking login button")
@@ -1821,31 +1824,47 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         # Step 4: Click login button — pause like human reading the form
         _random_mouse_move(driver, random.randint(1, 2))
         _human_delay(1.5, 3.0)
-        login_btn = None
-        for btn_sel in [
-            'button[data-e2e="login-button"]',
-            'button[type="submit"]',
-        ]:
-            try:
-                login_btn = driver.find_element(By.CSS_SELECTOR, btn_sel)
-                if login_btn:
-                    break
-            except Exception:
-                continue
-        if not login_btn:
-            try:
-                login_btn = driver.execute_script("""
-                    var btns = document.querySelectorAll('button');
-                    for (var i = 0; i < btns.length; i++) {
-                        var t = (btns[i].innerText || '').trim().toLowerCase();
-                        if ((t === 'log in' || t === 'login' || t === 'войти') && btns[i].offsetHeight > 0) {
-                            return btns[i];
-                        }
+        # Find login button — must be visible and inside the login form, not search
+        login_btn = driver.execute_script("""
+            // Method 1: data-e2e login button
+            var e2e = document.querySelector('button[data-e2e="login-button"]');
+            if (e2e && e2e.offsetHeight > 0) return e2e;
+
+            // Method 2: button with "Log in" text inside a modal/dialog/form
+            var containers = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], form, [class*="login"], [class*="Login"]');
+            for (var c = 0; c < containers.length; c++) {
+                var btns = containers[c].querySelectorAll('button');
+                for (var i = 0; i < btns.length; i++) {
+                    var t = (btns[i].innerText || '').trim().toLowerCase();
+                    if ((t === 'log in' || t === 'login') && btns[i].offsetHeight > 0
+                        && btns[i].offsetWidth > 50) {
+                        return btns[i];
                     }
-                    return null;
-                """)
-            except Exception:
-                pass
+                }
+            }
+
+            // Method 3: any visible button with "Log in" text (wider than 50px to skip small icons)
+            var allBtns = document.querySelectorAll('button');
+            for (var j = 0; j < allBtns.length; j++) {
+                var bt = (allBtns[j].innerText || '').trim().toLowerCase();
+                if ((bt === 'log in' || bt === 'login') && allBtns[j].offsetHeight > 0
+                    && allBtns[j].offsetWidth > 50) {
+                    return allBtns[j];
+                }
+            }
+
+            // Method 4: submit button inside login form (NOT search)
+            var forms = document.querySelectorAll('form');
+            for (var f = 0; f < forms.length; f++) {
+                var formText = (forms[f].innerText || '').toLowerCase();
+                if (formText.indexOf('password') >= 0 || formText.indexOf('username') >= 0) {
+                    var sub = forms[f].querySelector('button[type="submit"]');
+                    if (sub && sub.offsetHeight > 0) return sub;
+                }
+            }
+
+            return null;
+        """)
         if not login_btn:
             step("error", "Login button not found")
             driver.quit()
@@ -1902,8 +1921,12 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             };
         """)
 
-        # Click login button — only use ActionChains (most natural, single click)
-        ActionChains(driver).move_to_element(login_btn).click().perform()
+        # Click login button — try ActionChains first, fallback to JS click
+        try:
+            ActionChains(driver).move_to_element(login_btn).click().perform()
+        except Exception as click_err:
+            step("login_click_fallback", f"ActionChains failed: {click_err}, trying JS click")
+            driver.execute_script("arguments[0].click()", login_btn)
 
         # Wait for login API response
         time.sleep(8)
@@ -2721,7 +2744,10 @@ def _login_account_sync(driver: webdriver.Chrome, username: str, password: str) 
         _human_delay(0.5, 1.2)
 
         login_btn = driver.find_element(By.CSS_SELECTOR, 'button[data-e2e="login-button"]')
-        ActionChains(driver).move_to_element(login_btn).click().perform()
+        try:
+            ActionChains(driver).move_to_element(login_btn).click().perform()
+        except Exception:
+            driver.execute_script("arguments[0].click()", login_btn)
 
         time.sleep(random.uniform(5, 8))
 
