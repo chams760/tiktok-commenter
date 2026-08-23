@@ -322,8 +322,6 @@ async def api_import_cookies(request):
         data = await request.json()
         username = data.get("username", "").strip()
         cookies_raw = data.get("cookies", "")
-        if not username:
-            return web.json_response({"error": "username required"}, status=400)
         if not cookies_raw:
             return web.json_response({"error": "cookies required"}, status=400)
 
@@ -363,6 +361,10 @@ async def api_import_cookies(request):
                 elif c.get("expires"):
                     pc["expires"] = c["expires"]
                 pw_cookies.append(pc)
+
+        if not username:
+            sid = next((c["value"][:8] for c in pw_cookies if c["name"] == "sessionid"), None)
+            username = f"cookie_{sid}" if sid else f"cookie_{len(pw_cookies)}"
 
         safe = username.replace("@", "_at_").replace(".", "_")
         path = os.path.join(SESSIONS_DIR, f"{safe}.json")

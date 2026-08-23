@@ -373,7 +373,7 @@
             Paste cookies — supports Netscape .txt format and JSON (EditThisCookie, Cookie-Editor).
         </div>
         <div class="field" style="margin-bottom:8px;">
-            <input type="text" id="cookie-username" placeholder="TikTok username">
+            <input type="text" id="cookie-username" placeholder="TikTok username (optional — auto-detect)">
         </div>
         <div class="field" style="margin-bottom:8px;">
             <input type="text" id="cookie-proxy" placeholder="Proxy (optional) — login:pass:host:port">
@@ -837,7 +837,6 @@ async function importCookies() {
     const username = document.getElementById('cookie-username').value.trim();
     const proxy = document.getElementById('cookie-proxy').value.trim();
     const cookiesRaw = document.getElementById('cookie-json').value.trim();
-    if (!username) { toast('Enter account username', 'error'); return; }
     if (!cookiesRaw) { toast('Paste cookies', 'error'); return; }
     const btn = document.getElementById('btn-import-cookies');
     btn.disabled = true;
