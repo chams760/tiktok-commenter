@@ -971,21 +971,56 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             time.sleep(5)
             _dismiss_cookie_banner(driver)
 
-        # Now click "Log in with email" tab if on phone-or-email page
+        # Switch to "Email / Username" tab (default is Phone tab)
         time.sleep(1)
+        tab_result = "not_attempted"
         try:
-            driver.execute_script("""
-                var tabs = document.querySelectorAll('a, div[role="tab"], [class*="tab"], span');
-                for (var i = 0; i < tabs.length; i++) {
-                    var t = (tabs[i].innerText || '').trim().toLowerCase();
-                    if (t === 'email' || t.match(/log.*in.*with.*email|email.*log/i)) {
-                        if (tabs[i].offsetHeight > 0) { tabs[i].click(); break; }
+            tab_result = driver.execute_script("""
+                var allEls = document.querySelectorAll('a, div[role="tab"], [class*="tab"], span, p, div, label');
+                // Priority 1: exact "Email / Username" or "Username" tab
+                for (var i = 0; i < allEls.length; i++) {
+                    var el = allEls[i];
+                    if (el.offsetHeight === 0) continue;
+                    var t = (el.innerText || el.textContent || '').trim();
+                    var tl = t.toLowerCase();
+                    if (tl === 'email / username' || tl === 'email/username'
+                        || tl === 'username' || tl === 'email or username') {
+                        el.click();
+                        return 'clicked_tab:' + t;
                     }
                 }
+                // Priority 2: contains "username" in short text
+                for (var j = 0; j < allEls.length; j++) {
+                    var el2 = allEls[j];
+                    if (el2.offsetHeight === 0) continue;
+                    var t2 = (el2.innerText || '').trim().toLowerCase();
+                    if (t2.includes('username') && t2.length < 40) {
+                        el2.click();
+                        return 'clicked_username:' + t2;
+                    }
+                }
+                // Priority 3: "email" tab
+                for (var k = 0; k < allEls.length; k++) {
+                    var el3 = allEls[k];
+                    if (el3.offsetHeight === 0) continue;
+                    var t3 = (el3.innerText || '').trim().toLowerCase();
+                    if ((t3 === 'email' || t3.match(/log.*in.*with.*email/i)) && t3.length < 40) {
+                        el3.click();
+                        return 'clicked_email:' + t3;
+                    }
+                }
+                // List what tabs are visible for debugging
+                var found = [];
+                var tabEls = document.querySelectorAll('[class*="tab"], [role="tab"], [class*="channel"] a, [class*="login"] a');
+                for (var m = 0; m < tabEls.length; m++) {
+                    if (tabEls[m].offsetHeight > 0) found.push((tabEls[m].innerText || '').trim().substring(0, 30));
+                }
+                return 'not_found|tabs:' + found.join(',');
             """)
-        except Exception:
-            pass
-        time.sleep(2)
+        except Exception as e:
+            tab_result = f"error:{e}"
+        step("tab_switch", f"Tab switch: {tab_result}")
+        time.sleep(3)
 
         snap(driver, "login_page")
         page_src_len = len(driver.page_source or "")
@@ -1004,15 +1039,14 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         except Exception:
             pass
 
-        # Step 3: Fill credentials
+        # Step 3: Fill credentials (after switching to Username tab)
         email_input = None
         for selector in [
             'input[name="username"]',
+            'input[placeholder*="username" i]',
             'input[placeholder*="email" i]',
-            'input[placeholder*="Email" i]',
-            'input[placeholder*="phone" i]',
-            'input[type="text"]',
             'input[type="email"]',
+            'input[type="text"]',
         ]:
             try:
                 email_input = WebDriverWait(driver, 8).until(
