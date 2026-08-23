@@ -3116,16 +3116,36 @@ def _browser_enter_code_ui(driver, username: str, code: str, steps: list) -> dic
         step("code_entered", f"Code {code} entered into UI")
         _human_delay(1, 2)
 
-        # Try clicking verify/submit button
+        # Try clicking verify/submit button — must be inside the verification dialog, NOT the main login form
         try:
             verify_btn = driver.execute_script("""
                 var btns = document.querySelectorAll('button, div[role="button"]');
+                var candidates = [];
                 for (var i = 0; i < btns.length; i++) {
+                    if (btns[i].offsetHeight === 0) continue;
                     var t = (btns[i].innerText || '').trim().toLowerCase();
-                    if (t.match(/verify|submit|confirm|log.?in|подтвер|войти|далее|next/i) && btns[i].offsetHeight > 0) {
-                        btns[i].click();
-                        return 'clicked:' + t;
+                    var inVerifyDialog = false;
+                    var p = btns[i];
+                    for (var d = 0; d < 15 && p; d++) {
+                        var pt = (p.innerText || '').toLowerCase();
+                        if (pt.indexOf('verify') !== -1 && pt.indexOf('code') !== -1) {
+                            inVerifyDialog = true;
+                            break;
+                        }
+                        p = p.parentElement;
                     }
+                    if (inVerifyDialog && t.match(/^(next|verify|submit|confirm|далее|подтвер)$/i)) {
+                        candidates.unshift({el: btns[i], t: t, priority: 1});
+                    } else if (inVerifyDialog && t.match(/next|verify|submit|confirm|далее|подтвер/i)) {
+                        candidates.push({el: btns[i], t: t, priority: 2});
+                    } else if (t.match(/^(next|verify|submit|confirm)$/i) && !t.match(/^log.?in$/i)) {
+                        candidates.push({el: btns[i], t: t, priority: 3});
+                    }
+                }
+                if (candidates.length > 0) {
+                    candidates.sort(function(a, b) { return a.priority - b.priority; });
+                    candidates[0].el.click();
+                    return 'clicked:' + candidates[0].t + ' (p' + candidates[0].priority + ')';
                 }
                 return 'no_button';
             """)
