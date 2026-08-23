@@ -391,6 +391,9 @@
         <div class="field" style="margin-bottom:8px;">
             <input type="text" id="api-imap" placeholder="IMAP server (auto-detect for gmail, outlook, mail.ru, yandex)">
         </div>
+        <div class="field" style="margin-bottom:8px;">
+            <input type="text" id="api-sms-key" placeholder="SMS-Activate API key (for auto phone verification)">
+        </div>
         <div class="field" style="margin-bottom:0;">
             <input type="text" id="api-proxy" placeholder="Proxy (optional) — login:pass:host:port">
         </div>
@@ -673,13 +676,14 @@ async function apiLogin() {
     const manualPass = document.getElementById('api-pass').value.trim();
     const emailPass = document.getElementById('api-email-pass').value.trim();
     const imapServer = document.getElementById('api-imap').value.trim();
+    const smsKey = document.getElementById('api-sms-key').value.trim();
     const proxy = document.getElementById('api-proxy').value.trim();
 
     let body = {};
     if (accountId && !manualUser) {
-        body = { account_id: parseInt(accountId), email_password: emailPass, imap_server: imapServer, proxy };
+        body = { account_id: parseInt(accountId), email_password: emailPass, imap_server: imapServer, sms_api_key: smsKey, proxy };
     } else if (manualUser) {
-        body = { username: manualUser, password: manualPass, email_password: emailPass, imap_server: imapServer, proxy };
+        body = { username: manualUser, password: manualPass, email_password: emailPass, imap_server: imapServer, sms_api_key: smsKey, proxy };
     } else {
         toast('Select an account or enter email', 'error');
         return;

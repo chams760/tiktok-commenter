@@ -41,6 +41,65 @@ _CHROME_VER = _detect_chrome_version()
 UA = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{_CHROME_VER} Safari/537.36"
 
 _pending_verification: dict[str, dict] = {}
+_pending_browser_sessions: dict[str, dict] = {}
+
+
+# ── SMS-Activate.org API for phone verification ──────────────────────────
+SMS_ACTIVATE_API = "https://api.sms-activate.guru/stubs/handler_api.php"
+SMS_TIKTOK_SERVICE = "lf"  # TikTok service code on sms-activate
+
+
+def _sms_get_number(api_key: str, country: str = "0") -> dict | None:
+    """Rent a phone number for TikTok verification. Returns {id, number} or None."""
+    import requests
+    try:
+        r = requests.get(SMS_ACTIVATE_API, params={
+            "api_key": api_key, "action": "getNumber",
+            "service": SMS_TIKTOK_SERVICE, "country": country
+        }, timeout=15)
+        text = r.text.strip()
+        if text.startswith("ACCESS_NUMBER"):
+            parts = text.split(":")
+            return {"id": parts[1], "number": parts[2]}
+        logger.warning(f"SMS-activate getNumber: {text}")
+        return None
+    except Exception as e:
+        logger.error(f"SMS-activate getNumber error: {e}")
+        return None
+
+
+def _sms_set_status(api_key: str, activation_id: str, status: int) -> str:
+    """Set activation status: 1=ready, 6=complete, 8=cancel."""
+    import requests
+    try:
+        r = requests.get(SMS_ACTIVATE_API, params={
+            "api_key": api_key, "action": "setStatus",
+            "id": activation_id, "status": status
+        }, timeout=10)
+        return r.text.strip()
+    except Exception as e:
+        return f"error:{e}"
+
+
+def _sms_get_code(api_key: str, activation_id: str, max_wait: int = 120) -> str | None:
+    """Poll for SMS code. Returns code string or None after timeout."""
+    import requests
+    start = time.time()
+    while time.time() - start < max_wait:
+        try:
+            r = requests.get(SMS_ACTIVATE_API, params={
+                "api_key": api_key, "action": "getStatus",
+                "id": activation_id
+            }, timeout=10)
+            text = r.text.strip()
+            if text.startswith("STATUS_OK"):
+                return text.split(":")[1]
+            if text == "STATUS_CANCEL":
+                return None
+        except Exception:
+            pass
+        time.sleep(5)
+    return None
 
 
 def _session_path(username: str) -> str:
@@ -1203,8 +1262,6 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
     return await loop.run_in_executor(_executor, _test_login_sync, username, password, proxy)
 
 
-_pending_browser_sessions: dict[str, dict] = {}
-
 
 def _detect_imap_server(email: str) -> str:
     domain = email.split("@")[-1].lower()
@@ -1373,7 +1430,8 @@ def _enter_verification_code(driver, code: str) -> bool:
 
 
 def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
-                               email_password: str = "", imap_server: str = "") -> dict:
+                               email_password: str = "", imap_server: str = "",
+                               sms_api_key: str = "") -> dict:
     """Login via real browser — click through TikTok's actual UI so their JS handles X-Bogus/captcha."""
     steps = []
     ts = int(datetime.now(timezone.utc).timestamp())
@@ -1472,67 +1530,15 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                     return {"ok": False, "steps": steps, "error": f"Chrome crashed: {e}"}
         _dismiss_cookie_banner(driver)
 
-        # Extended warmup: browse like a real user before login (25-40s)
-        # TikTok's server-side risk scoring checks behavior before login
-        step("warmup_start", "Starting realistic browsing warmup...")
-
-        # Phase 1: Initial scroll through feed (8-12s)
+        # Brief warmup: scroll like a real user (5-8s)
         _random_mouse_move(driver, random.randint(2, 4))
-        time.sleep(random.uniform(1.5, 2.5))
-        for _ in range(random.randint(3, 5)):
-            driver.execute_script("window.scrollBy(0, arguments[0])", random.randint(300, 700))
-            time.sleep(random.uniform(1.5, 3.0))
-            _random_mouse_move(driver, random.randint(1, 2))
-
-        # Phase 2: Click on a video and "watch" it (5-10s)
-        try:
-            watched = driver.execute_script("""
-                var videos = document.querySelectorAll('[data-e2e="recommend-list-item-container"] a, a[href*="/video/"], [class*="DivItemContainer"] a');
-                for (var i = 0; i < videos.length; i++) {
-                    if (videos[i].offsetHeight > 0 && videos[i].href) {
-                        videos[i].click();
-                        return videos[i].href.substring(0, 60);
-                    }
-                }
-                return null;
-            """)
-            if watched:
-                time.sleep(random.uniform(4, 8))
-                _random_mouse_move(driver, random.randint(1, 3))
-                driver.back()
-                time.sleep(random.uniform(2, 3))
-        except Exception:
-            pass
-
-        # Phase 3: More scrolling (5-8s)
-        _dismiss_cookie_banner(driver)
+        driver.execute_script("window.scrollBy(0, arguments[0])", random.randint(200, 500))
+        time.sleep(random.uniform(1.5, 3.0))
+        driver.execute_script("window.scrollBy(0, arguments[0])", random.randint(-100, 300))
+        _random_mouse_move(driver, random.randint(1, 3))
+        time.sleep(random.uniform(2.0, 4.0))
         driver.execute_script("window.scrollTo(0, 0)")
         time.sleep(random.uniform(1.0, 2.0))
-        for _ in range(random.randint(2, 4)):
-            driver.execute_script("window.scrollBy(0, arguments[0])", random.randint(200, 600))
-            time.sleep(random.uniform(1.5, 2.5))
-            _random_mouse_move(driver, random.randint(1, 2))
-
-        # Phase 4: Hover over sidebar items (2-4s)
-        try:
-            driver.execute_script("""
-                var sidebar = document.querySelectorAll('nav a, [data-e2e="nav-explore"], [data-e2e="nav-following"]');
-                for (var i = 0; i < Math.min(sidebar.length, 3); i++) {
-                    if (sidebar[i].offsetHeight > 0) {
-                        var r = sidebar[i].getBoundingClientRect();
-                        var ev = new MouseEvent('mouseover', {bubbles:true, clientX:r.left+r.width/2, clientY:r.top+r.height/2});
-                        sidebar[i].dispatchEvent(ev);
-                    }
-                }
-            """)
-            time.sleep(random.uniform(1.5, 3.0))
-        except Exception:
-            pass
-
-        # Scroll back to top before login
-        driver.execute_script("window.scrollTo(0, 0)")
-        time.sleep(random.uniform(1.0, 2.0))
-        _random_mouse_move(driver, random.randint(1, 2))
 
         step("homepage", f"Homepage visited. Src: {len(driver.page_source)}b")
 
@@ -2118,8 +2124,156 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             step("verify_detected", "Verification/challenge detected after login click!")
             snap(driver, "verify_after_login")
 
+            # ── SMS verification flow (if sms_api_key provided) ──
+            if sms_api_key:
+                step("sms_start", "SMS API key provided, trying phone verification...")
+                sms_number_data = _sms_get_number(sms_api_key)
+                if sms_number_data:
+                    sms_id = sms_number_data["id"]
+                    sms_phone = sms_number_data["number"]
+                    step("sms_number", f"Got number: +{sms_phone} (id={sms_id})")
+
+                    # Check if verification dialog has Phone option
+                    has_phone = driver.execute_script("""
+                        var dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="verify"], [class*="IDV"]');
+                        for (var d = 0; d < dialogs.length; d++) {
+                            var dt = (dialogs[d].innerText || '').toLowerCase();
+                            if (dt.indexOf('verify') >= 0 && (dt.indexOf('phone') >= 0 || dt.indexOf('sms') >= 0))
+                                return true;
+                        }
+                        return false;
+                    """)
+
+                    if has_phone:
+                        # Click Phone option
+                        phone_clicked = driver.execute_script("""
+                            function fullClick(el) {
+                                var r = el.getBoundingClientRect();
+                                var opts = {bubbles:true, cancelable:true, view:window,
+                                    clientX: r.left+r.width/2, clientY: r.top+r.height/2};
+                                el.dispatchEvent(new PointerEvent('pointerdown', opts));
+                                el.dispatchEvent(new MouseEvent('mousedown', opts));
+                                el.dispatchEvent(new PointerEvent('pointerup', opts));
+                                el.dispatchEvent(new MouseEvent('mouseup', opts));
+                                el.dispatchEvent(new MouseEvent('click', opts));
+                            }
+                            var dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="verify"], [class*="IDV"]');
+                            for (var d = 0; d < dialogs.length; d++) {
+                                var dt = (dialogs[d].innerText || '').toLowerCase();
+                                if (dt.indexOf('verify') < 0) continue;
+                                var children = dialogs[d].querySelectorAll('div,span,a,p,button,li');
+                                for (var i = 0; i < children.length; i++) {
+                                    var el = children[i];
+                                    if (el.offsetHeight === 0 || el.offsetHeight > 100) continue;
+                                    var t = (el.innerText || '').trim().toLowerCase();
+                                    if ((t === 'phone' || t === 'sms' || t === 'phone number')
+                                        && el.offsetWidth > 20) {
+                                        fullClick(el);
+                                        return 'clicked:' + t;
+                                    }
+                                }
+                            }
+                            return null;
+                        """)
+                        step("sms_phone_click", f"Phone option: {phone_clicked}")
+                        time.sleep(3)
+
+                        if phone_clicked:
+                            # Find phone input, enter number, click send
+                            phone_entered = driver.execute_script("""
+                                var phone = arguments[0];
+                                var inputs = document.querySelectorAll('input');
+                                for (var i = 0; i < inputs.length; i++) {
+                                    var inp = inputs[i];
+                                    if (inp.offsetHeight === 0) continue;
+                                    var ph = (inp.placeholder || '').toLowerCase();
+                                    var tp = inp.type || '';
+                                    if (ph.indexOf('phone') >= 0 || ph.indexOf('number') >= 0
+                                        || tp === 'tel') {
+                                        var ns = Object.getOwnPropertyDescriptor(
+                                            HTMLInputElement.prototype, 'value').set;
+                                        ns.call(inp, phone);
+                                        inp.dispatchEvent(new Event('input', {bubbles:true}));
+                                        inp.dispatchEvent(new Event('change', {bubbles:true}));
+                                        return 'entered';
+                                    }
+                                }
+                                return 'no_phone_input';
+                            """, sms_phone)
+                            step("sms_phone_enter", f"Phone entry: {phone_entered}")
+
+                            if phone_entered == "entered":
+                                # Click Send code
+                                time.sleep(1)
+                                driver.execute_script("""
+                                    var btns = document.querySelectorAll('button, div[role="button"]');
+                                    for (var i = 0; i < btns.length; i++) {
+                                        var t = (btns[i].innerText || '').trim().toLowerCase();
+                                        if ((t === 'send code' || t === 'send' || t === 'next'
+                                             || t === 'continue' || t === 'verify')
+                                            && btns[i].offsetHeight > 0) {
+                                            btns[i].click();
+                                            return t;
+                                        }
+                                    }
+                                    return null;
+                                """)
+                                step("sms_send_code", "Send code clicked")
+
+                                # Set status to "ready" (waiting for SMS)
+                                _sms_set_status(sms_api_key, sms_id, 1)
+
+                                # Wait for SMS code
+                                step("sms_waiting", f"Waiting for SMS code to +{sms_phone}...")
+                                sms_code = _sms_get_code(sms_api_key, sms_id, max_wait=120)
+
+                                if sms_code:
+                                    step("sms_code_received", f"SMS code: {sms_code}")
+                                    code_entered = _enter_verification_code(driver, sms_code)
+                                    step("sms_code_entered", f"Code entry: {code_entered}")
+                                    time.sleep(2)
+
+                                    # Click verify/next button
+                                    driver.execute_script("""
+                                        var btns = document.querySelectorAll('button, div[role="button"]');
+                                        for (var i = 0; i < btns.length; i++) {
+                                            var t = (btns[i].innerText || '').trim().toLowerCase();
+                                            if ((t === 'next' || t === 'verify' || t === 'submit'
+                                                 || t === 'confirm' || t === 'log in')
+                                                && btns[i].offsetHeight > 0 && !btns[i].disabled) {
+                                                btns[i].click();
+                                                return t;
+                                            }
+                                        }
+                                        return null;
+                                    """)
+                                    time.sleep(5)
+
+                                    # Mark SMS activation as complete
+                                    _sms_set_status(sms_api_key, sms_id, 6)
+
+                                    # Check login
+                                    try:
+                                        cookies = driver.get_cookies()
+                                        cookie_names = [c["name"] for c in cookies]
+                                        if "sessionid" in cookie_names or "sid_tt" in cookie_names:
+                                            _save_cookies(driver, username)
+                                            step("success", "LOGIN SUCCESS via SMS verification!")
+                                            driver.quit()
+                                            return {"ok": True, "steps": steps}
+                                    except Exception:
+                                        pass
+                                    step("sms_login_check", "SMS code entered, checking status...")
+                                else:
+                                    step("sms_no_code", "No SMS code received in 120s")
+                                    _sms_set_status(sms_api_key, sms_id, 8)
+                    else:
+                        step("sms_no_phone_option", "Verification dialog has no Phone option, falling back to email")
+                else:
+                    step("sms_no_number", "Could not get SMS number from API")
+
+            # ── Email verification flow (fallback or primary) ──
             # Click "Email" option in verification dialog
-            # Use ActionChains for physical click — JS click often doesn't work on TikTok's React components
             email_row_el = None
             try:
                 email_row_el = driver.execute_script("""
@@ -2409,35 +2563,6 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                         bodySnippet: bodyText.substring(0, 300)};
             """)
             step("verify_code_state", f"Code state: {json.dumps(code_state)[:500]}")
-
-            # Wait for Resend code timer, then click Resend (first send often blocked)
-            step("waiting_resend", "Waiting 60s for Resend code timer...")
-            time.sleep(62)
-            try:
-                resend_result = driver.execute_script("""
-                    var els = document.querySelectorAll('div, span, a, button, p');
-                    for (var i = 0; i < els.length; i++) {
-                        var t = (els[i].innerText || '').trim().toLowerCase();
-                        if ((t === 'resend code' || t === 'resend' || t === 'resend code ')
-                            && els[i].offsetHeight > 0 && els[i].offsetWidth > 20) {
-                            var r = els[i].getBoundingClientRect();
-                            var opts = {bubbles:true, cancelable:true, view:window,
-                                clientX: r.left + r.width/2, clientY: r.top + r.height/2};
-                            els[i].dispatchEvent(new PointerEvent('pointerdown', opts));
-                            els[i].dispatchEvent(new MouseEvent('mousedown', opts));
-                            els[i].dispatchEvent(new PointerEvent('pointerup', opts));
-                            els[i].dispatchEvent(new MouseEvent('mouseup', opts));
-                            els[i].dispatchEvent(new MouseEvent('click', opts));
-                            return 'clicked:' + t;
-                        }
-                    }
-                    return 'not_found';
-                """)
-                step("resend_code", f"Resend: {resend_result}")
-            except Exception as e:
-                step("resend_error", f"Resend failed: {type(e).__name__}")
-
-            time.sleep(10)
 
             # Save browser session for manual code entry via /api/submit-code
             _pending_browser_sessions[username] = {
@@ -3002,18 +3127,20 @@ def _browser_submit_manual_code_sync(username: str, code: str) -> dict:
 
 
 async def browser_fetch_login(username: str, password: str, proxy: str = "",
-                              email_password: str = "", imap_server: str = "") -> dict:
+                              email_password: str = "", imap_server: str = "",
+                              sms_api_key: str = "") -> dict:
     loop = asyncio.get_event_loop()
     try:
         return await asyncio.wait_for(
             loop.run_in_executor(
-                _executor, _browser_fetch_login_sync, username, password, proxy, email_password, imap_server
+                _executor, _browser_fetch_login_sync, username, password, proxy,
+                email_password, imap_server, sms_api_key
             ),
             timeout=300
         )
     except asyncio.TimeoutError:
-        return {"ok": False, "steps": [{"step": "timeout", "note": "Login timed out after 120s"}],
-                "error": "Login timed out after 120 seconds"}
+        return {"ok": False, "steps": [{"step": "timeout", "note": "Login timed out after 300s"}],
+                "error": "Login timed out after 300 seconds"}
 
 
 async def browser_submit_manual_code(username: str, code: str) -> dict:

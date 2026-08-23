@@ -209,17 +209,19 @@ async def api_login(request):
             proxy = acc.get("proxy", "")
             email_password = acc.get("email_password", "") or data.get("email_password", "")
             imap_server = acc.get("imap_server", "") or data.get("imap_server", "")
+            sms_api_key = acc.get("sms_api_key", "") or data.get("sms_api_key", "")
         else:
             username = data.get("username", "").strip()
             password = data.get("password", "").strip()
             proxy = data.get("proxy", "").strip()
             email_password = data.get("email_password", "").strip()
             imap_server = data.get("imap_server", "").strip()
+            sms_api_key = data.get("sms_api_key", "").strip()
 
         if not username:
             return web.json_response({"error": "username required"}, status=400)
 
-        result = await browser_fetch_login(username, password, proxy, email_password, imap_server)
+        result = await browser_fetch_login(username, password, proxy, email_password, imap_server, sms_api_key)
         return web.json_response(result)
     except Exception as e:
         logger.error(f"API login error: {e}")
