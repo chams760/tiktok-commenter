@@ -2081,8 +2081,7 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                             return target;
                         }
 
-                        // Strategy 2: find the row containing "Email" label
-                        // TikTok's verify dialog has rows like: [Email icon] Email \n s***3@email.com
+                        // Strategy 2: find the row containing "Email" label + masked address
                         for (var j = 0; j < children.length; j++) {
                             var el2 = children[j];
                             if (el2.offsetHeight === 0 || el2.offsetHeight > 200) continue;
@@ -2280,10 +2279,9 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
 
                 // Look for any clickable action button in dialogs
                 var clickPatterns = [
-                    /^send$/i, /^send code$/i, /send.*code/i, /^next$/i,
-                    /^continue$/i, /^verify$/i, /^confirm$/i, /^get code$/i,
-                    /^submit$/i, /^ok$/i, /^yes$/i, /^done$/i,
-                    /отправить/i, /далее/i, /подтвердить/i
+                    /^send$/i, /^send code$/i, /send.*code/i,
+                    /^get code$/i, /^resend$/i, /^resend code$/i,
+                    /отправить/i
                 ];
                 var allClickable = document.querySelectorAll('button, div[role="button"], a, [tabindex], [class*="btn"], [class*="Btn"]');
                 for (var i = 0; i < allClickable.length; i++) {
