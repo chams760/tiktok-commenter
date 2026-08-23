@@ -2040,8 +2040,50 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                 return 'not_found';
             """)
             step("verify_email_click", f"Email option: {email_verify_clicked}")
-            time.sleep(5)
+            time.sleep(3)
             snap(driver, "after_verify_email_click")
+
+            # After clicking email option, TikTok may show "Send code" button
+            send_code_result = driver.execute_script("""
+                // Check what's visible now in dialogs
+                var dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="overlay"], [class*="verify"]');
+                var dialogTexts = [];
+                for (var d = 0; d < dialogs.length; d++) {
+                    if (dialogs[d].offsetHeight > 0) {
+                        dialogTexts.push((dialogs[d].innerText || '').substring(0, 200));
+                    }
+                }
+
+                // Click "Send code" / "Send" / "Next" / "Continue" / "Verify" button
+                var btns = document.querySelectorAll('button, div[role="button"], a');
+                for (var i = 0; i < btns.length; i++) {
+                    var btn = btns[i];
+                    if (btn.offsetHeight === 0 || btn.disabled) continue;
+                    var t = (btn.innerText || '').trim().toLowerCase();
+                    if (t.match(/^(send|send code|send verification|next|continue|verify|confirm|get code|отправить)$/i)
+                        || t.match(/send.*code/i)) {
+                        btn.click();
+                        return JSON.stringify({clicked: t, dialogs: dialogTexts});
+                    }
+                }
+
+                // Also try clickable divs/spans with "send" text
+                var allEls = document.querySelectorAll('div, span, a, p');
+                for (var j = 0; j < allEls.length; j++) {
+                    var el = allEls[j];
+                    if (el.offsetHeight === 0) continue;
+                    var et = (el.innerText || '').trim().toLowerCase();
+                    if (et.match(/^(send code|send|get code)$/i) && et.length < 20) {
+                        el.click();
+                        return JSON.stringify({clicked: et, dialogs: dialogTexts});
+                    }
+                }
+
+                return JSON.stringify({clicked: null, dialogs: dialogTexts});
+            """)
+            step("send_code_click", f"Send code: {send_code_result}")
+            time.sleep(5)
+            snap(driver, "after_send_code")
 
             # Check if code input appeared
             code_state = driver.execute_script("""
@@ -2053,9 +2095,15 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                     codeInputs.push({type: inp.type, name: inp.name, ph: inp.placeholder,
                                      maxLen: inp.maxLength, autocomplete: inp.autocomplete});
                 }
+                // Check all visible dialogs for code-related content
+                var dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="verify"]');
+                var dialogTexts = [];
+                for (var d = 0; d < dialogs.length; d++) {
+                    if (dialogs[d].offsetHeight > 0) dialogTexts.push((dialogs[d].innerText || '').substring(0, 300));
+                }
                 var bodyText = document.body.innerText || '';
-                var hasCodeText = bodyText.match(/enter.*code|code.*sent|verification.*code|verify.*code/i) !== null;
-                return {inputs: codeInputs, hasCodeText: hasCodeText,
+                var hasCodeText = bodyText.match(/enter.*code|code.*sent|verification.*code|verify.*code|we.*sent/i) !== null;
+                return {inputs: codeInputs, hasCodeText: hasCodeText, dialogs: dialogTexts,
                         bodySnippet: bodyText.substring(0, 300)};
             """)
             step("verify_code_state", f"Code state: {json.dumps(code_state)[:500]}")
