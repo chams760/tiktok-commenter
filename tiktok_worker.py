@@ -94,6 +94,25 @@ def _human_type(element, text):
     _human_delay(0.2, 0.5)
 
 
+def _react_set_value(driver: webdriver.Chrome, element, text: str):
+    """Set input value using React-compatible native setter + event dispatch.
+    React intercepts events via its own synthetic system; plain send_keys
+    may not trigger onChange handlers. This uses the native HTMLInputElement
+    value setter and dispatches input/change events that React picks up."""
+    driver.execute_script("""
+        var el = arguments[0];
+        var value = arguments[1];
+        // Use native setter to bypass React's synthetic property
+        var nativeSetter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, 'value'
+        ).set;
+        nativeSetter.call(el, value);
+        // Dispatch events React listens for
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+    """, element, text)
+
+
 def _random_mouse_move(driver: webdriver.Chrome, steps=3):
     actions = ActionChains(driver)
     for _ in range(steps):
@@ -1424,6 +1443,8 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         ActionChains(driver).move_to_element(email_input).click().perform()
         _human_delay(0.2, 0.4)
         _human_type(email_input, username)
+        # Ensure React state picks up the value via native setter
+        _react_set_value(driver, email_input, username)
         _human_delay(0.3, 0.5)
 
         def _find_pass_input():
@@ -1513,7 +1534,14 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         ActionChains(driver).move_to_element(pass_input).click().perform()
         _human_delay(0.2, 0.4)
         _human_type(pass_input, password)
-        step("credentials", "Credentials filled")
+        # Ensure React state picks up the value via native setter
+        _react_set_value(driver, pass_input, password)
+        _human_delay(0.3, 0.5)
+
+        # Verify both inputs have correct values in DOM
+        email_val = driver.execute_script("return arguments[0].value", email_input)
+        pass_val = driver.execute_script("return arguments[0].value", pass_input)
+        step("credentials", f"Credentials filled. Email={email_val[:3]}*** Pass={'*'*len(pass_val)} ({len(pass_val)} chars)")
 
         # Step 4: Click login button
         _human_delay(0.5, 1.0)
@@ -1547,17 +1575,50 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             driver.quit()
             return {"ok": False, "steps": steps, "error": "Login button not found"}
 
-        ActionChains(driver).move_to_element(login_btn).click().perform()
-        time.sleep(5)
+        # Check if login button is disabled (fields might not be validated yet)
+        btn_disabled = driver.execute_script("""
+            var btn = arguments[0];
+            return {
+                disabled: btn.disabled,
+                ariaDisabled: btn.getAttribute('aria-disabled'),
+                classes: btn.className,
+                text: (btn.innerText || '').trim()
+            };
+        """, login_btn)
+        step("login_btn_state", f"Button: {json.dumps(btn_disabled)}")
+
+        # Click with multiple methods for reliability
+        # Method 1: Enter key from password field
+        try:
+            from selenium.webdriver.common.keys import Keys
+            pass_input.send_keys(Keys.ENTER)
+        except Exception:
+            pass
+        _human_delay(0.5, 0.8)
+
+        # Method 2: ActionChains click
+        try:
+            ActionChains(driver).move_to_element(login_btn).click().perform()
+        except Exception:
+            pass
+        _human_delay(0.3, 0.5)
+
+        # Method 3: JS click + native event dispatch (bypasses any overlay)
+        driver.execute_script("""
+            var btn = arguments[0];
+            btn.focus();
+            btn.click();
+            btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+        """, login_btn)
+
+        time.sleep(8)
         snap(driver, "after_login_click")
 
-        # Check modal for errors/captcha/verification BEFORE navigating away
+        # Check modal for errors BEFORE navigating away
         modal_text = driver.execute_script("""
-            // Look for error messages in modal/form
             var errors = [];
             var errorEls = document.querySelectorAll(
                 '[class*="error"], [class*="Error"], [class*="alert"], [class*="warning"], '
-                + '[class*="captcha"], [class*="Captcha"], [class*="verify"], '
                 + '[class*="message"], [data-e2e*="error"]'
             );
             for (var i = 0; i < errorEls.length; i++) {
@@ -1593,9 +1654,24 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         except Exception:
             modal_data = {}
 
-        # Check for captcha in page source
-        page_src = driver.page_source.lower()
-        has_captcha = "captcha" in page_src or "puzzle" in page_src or "slider" in page_src
+        # Check for REAL captcha UI (not just word in JS code)
+        has_captcha = driver.execute_script("""
+            // Check for actual captcha overlay/dialog
+            var captchaSelectors = [
+                '[class*="captcha_verify"]', '[id*="captcha"]',
+                '[class*="TUICaptcha"]', '[class*="captcha-container"]',
+                '[class*="verify-bar"]', '[class*="seam-modal"]',
+                'iframe[src*="captcha"]', 'iframe[src*="verify"]',
+            ];
+            for (var i = 0; i < captchaSelectors.length; i++) {
+                var el = document.querySelector(captchaSelectors[i]);
+                if (el && el.offsetHeight > 0) return true;
+            }
+            // Check body text for captcha prompt
+            var bodyText = document.body.innerText || '';
+            if (bodyText.match(/drag.*slider|slide.*puzzle|verify.*human|captcha/i)) return true;
+            return false;
+        """)
 
         body_text = driver.find_element(By.TAG_NAME, "body").text
         step("after_login", f"URL: {driver.current_url} | Captcha: {has_captcha} | Body: {body_text[:200]}")
@@ -1718,10 +1794,33 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         if "verify" in body_after.lower() or "code" in body_after.lower():
             step("verify_needed", "Verification page detected after reload")
         else:
+            # Go back and check the login form state
+            driver.back()
+            time.sleep(3)
+            form_state = driver.execute_script("""
+                var inputs = document.querySelectorAll('input');
+                var visible = [];
+                for (var i = 0; i < inputs.length; i++) {
+                    if (inputs[i].offsetHeight > 0 && inputs[i].type !== 'hidden') {
+                        visible.push({
+                            type: inputs[i].type, name: inputs[i].name,
+                            ph: inputs[i].placeholder, val: inputs[i].value ? 'filled' : 'empty'
+                        });
+                    }
+                }
+                // Check for any error messages
+                var errs = [];
+                var errEls = document.querySelectorAll('[class*="error"], [class*="Error"], [class*="invalid"]');
+                for (var j = 0; j < errEls.length; j++) {
+                    var t = (errEls[j].innerText || '').trim();
+                    if (t && errEls[j].offsetHeight > 0) errs.push(t);
+                }
+                return JSON.stringify({inputs: visible, errors: errs});
+            """)
             snap(driver, "login_failed_silent")
-            step("failed_silent", f"Login failed. Errors: {modal_data.get('errors', [])} | Modal: {modal_data.get('modalText', '')[:200]}")
+            step("failed_silent", f"Login failed. Form: {form_state} | Modal errors: {modal_data.get('errors', [])}")
             driver.quit()
-            return {"ok": False, "steps": steps, "error": f"Login failed silently. Modal errors: {modal_data.get('errors', [])}"}
+            return {"ok": False, "steps": steps, "error": f"Login failed. Form state: {form_state}"}
 
         # Check: captcha on login page?
         page_src = driver.page_source.lower()
