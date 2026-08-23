@@ -1192,6 +1192,172 @@ async def test_login(username: str, password: str, proxy: str = "") -> list[dict
 _pending_browser_sessions: dict[str, dict] = {}
 
 
+def _detect_imap_server(email: str) -> str:
+    domain = email.split("@")[-1].lower()
+    imap_map = {
+        "gmail.com": "imap.gmail.com",
+        "outlook.com": "imap-mail.outlook.com",
+        "hotmail.com": "imap-mail.outlook.com",
+        "live.com": "imap-mail.outlook.com",
+        "yahoo.com": "imap.mail.yahoo.com",
+        "mail.ru": "imap.mail.ru",
+        "yandex.ru": "imap.yandex.ru",
+        "ya.ru": "imap.yandex.ru",
+        "icloud.com": "imap.mail.me.com",
+    }
+    return imap_map.get(domain, f"imap.{domain}")
+
+
+def _read_tiktok_code_from_imap(email_addr: str, email_pass: str, imap_server: str = "",
+                                 max_wait: int = 60) -> str | None:
+    """Read TikTok verification code from email via IMAP."""
+    import imaplib
+    import email as email_lib
+    from email.header import decode_header
+    import re
+
+    if not imap_server:
+        imap_server = _detect_imap_server(email_addr)
+
+    logger.info(f"IMAP: connecting to {imap_server} for {email_addr}")
+
+    start_time = time.time()
+    while time.time() - start_time < max_wait:
+        try:
+            mail = imaplib.IMAP4_SSL(imap_server, 993)
+            mail.login(email_addr, email_pass)
+            mail.select("INBOX")
+
+            # Search for recent TikTok emails
+            _, msg_ids = mail.search(None, '(FROM "tiktok" UNSEEN)')
+            if not msg_ids[0]:
+                # Try broader search
+                _, msg_ids = mail.search(None, '(OR (FROM "tiktok") (SUBJECT "verification"))')
+
+            ids = msg_ids[0].split()
+            if ids:
+                # Get the most recent email
+                for msg_id in reversed(ids[-5:]):
+                    _, msg_data = mail.fetch(msg_id, "(RFC822)")
+                    raw = msg_data[0][1]
+                    msg = email_lib.message_from_bytes(raw)
+
+                    body = ""
+                    if msg.is_multipart():
+                        for part in msg.walk():
+                            if part.get_content_type() == "text/plain":
+                                body = part.get_payload(decode=True).decode(errors="ignore")
+                                break
+                            elif part.get_content_type() == "text/html":
+                                body = part.get_payload(decode=True).decode(errors="ignore")
+                    else:
+                        body = msg.get_payload(decode=True).decode(errors="ignore")
+
+                    # Look for 4-6 digit code
+                    codes = re.findall(r'\b(\d{4,6})\b', body)
+                    if codes:
+                        mail.logout()
+                        return codes[0]
+
+            mail.logout()
+        except Exception as e:
+            logger.warning(f"IMAP error: {e}")
+
+        if time.time() - start_time < max_wait:
+            time.sleep(10)
+
+    return None
+
+
+def _enter_verification_code(driver, code: str) -> bool:
+    """Enter verification code into TikTok's code input fields."""
+    try:
+        # Find code input fields
+        entered = driver.execute_script("""
+            var code = arguments[0];
+            var inputs = document.querySelectorAll('input');
+            var codeInputs = [];
+            for (var i = 0; i < inputs.length; i++) {
+                var inp = inputs[i];
+                if (inp.offsetHeight === 0) continue;
+                var ph = (inp.placeholder || '').toLowerCase();
+                var name = (inp.name || '').toLowerCase();
+                if (ph.includes('code') || ph.includes('verify') || name.includes('code')
+                    || inp.type === 'tel' || inp.type === 'number'
+                    || (inp.maxLength > 0 && inp.maxLength <= 6)) {
+                    codeInputs.push(inp);
+                }
+            }
+
+            if (codeInputs.length === 0) {
+                // Try finding any visible text input that appeared recently
+                for (var j = 0; j < inputs.length; j++) {
+                    if (inputs[j].offsetHeight > 0 && inputs[j].type !== 'hidden'
+                        && inputs[j].type !== 'password' && inputs[j].name !== 'username'
+                        && inputs[j].name !== 'q') {
+                        codeInputs.push(inputs[j]);
+                    }
+                }
+            }
+
+            if (codeInputs.length === 1) {
+                // Single input for full code
+                var nativeSetter = Object.getOwnPropertyDescriptor(
+                    HTMLInputElement.prototype, 'value').set;
+                nativeSetter.call(codeInputs[0], code);
+                codeInputs[0].dispatchEvent(new Event('input', {bubbles: true}));
+                codeInputs[0].dispatchEvent(new Event('change', {bubbles: true}));
+                return 'entered_single';
+            } else if (codeInputs.length >= 4) {
+                // Multiple inputs (one digit each)
+                for (var k = 0; k < Math.min(code.length, codeInputs.length); k++) {
+                    var nativeSetter2 = Object.getOwnPropertyDescriptor(
+                        HTMLInputElement.prototype, 'value').set;
+                    nativeSetter2.call(codeInputs[k], code[k]);
+                    codeInputs[k].dispatchEvent(new Event('input', {bubbles: true}));
+                    codeInputs[k].dispatchEvent(new Event('change', {bubbles: true}));
+                }
+                return 'entered_multi_' + codeInputs.length;
+            }
+            return 'no_inputs_found';
+        """, code)
+
+        logger.info(f"Code entry result: {entered}")
+
+        # Also try typing via send_keys as backup
+        if entered and entered.startswith("no_inputs"):
+            inputs = driver.find_elements(By.CSS_SELECTOR, 'input')
+            for inp in inputs:
+                if inp.is_displayed() and inp.get_attribute("type") not in ("hidden", "password"):
+                    name = (inp.get_attribute("name") or "").lower()
+                    if name not in ("username", "q"):
+                        inp.clear()
+                        _human_type(inp, code)
+                        return True
+            return False
+
+        # Click verify/submit button
+        time.sleep(1)
+        driver.execute_script("""
+            var btns = document.querySelectorAll('button');
+            for (var i = 0; i < btns.length; i++) {
+                var t = (btns[i].innerText || '').trim().toLowerCase();
+                if ((t === 'verify' || t === 'submit' || t === 'confirm' || t === 'next'
+                     || t === 'continue' || t === 'подтвердить')
+                    && btns[i].offsetHeight > 0 && !btns[i].disabled) {
+                    btns[i].click();
+                    return true;
+                }
+            }
+            return false;
+        """)
+
+        return entered and not entered.startswith("no_inputs")
+    except Exception as e:
+        logger.error(f"Code entry error: {e}")
+        return False
+
+
 def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                                email_password: str = "", imap_server: str = "") -> dict:
     """Login via real browser — click through TikTok's actual UI so their JS handles X-Bogus/captcha."""
@@ -1838,6 +2004,110 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         if post_login_state.get("hasCodeInput") or post_login_state.get("hasVerifyText"):
             step("verify_detected", "Verification/challenge detected after login click!")
             snap(driver, "verify_after_login")
+
+            # Click "Email" option in verification dialog to send code
+            email_verify_clicked = driver.execute_script("""
+                var allEls = document.querySelectorAll('div, span, a, button, p, label');
+                for (var i = 0; i < allEls.length; i++) {
+                    var el = allEls[i];
+                    if (el.offsetHeight === 0) continue;
+                    var t = (el.innerText || '').trim().toLowerCase();
+                    // Match "Email" option or masked email like "s***3@..."
+                    if ((t === 'email' || t.match(/^e-?mail$/i)
+                         || t.match(/^[a-z]\\*+.*@/i)
+                         || t.match(/email\\s+[a-z]\\*+.*@/i))
+                        && t.length < 80) {
+                        // Click the element or its parent (might be a clickable row)
+                        var clickTarget = el;
+                        if (el.tagName === 'SPAN' || el.tagName === 'P') {
+                            var parent = el.parentElement;
+                            if (parent && parent.offsetHeight > 0) clickTarget = parent;
+                        }
+                        clickTarget.click();
+                        return 'clicked:' + t;
+                    }
+                }
+                // Try clicking elements that contain the email pattern
+                for (var j = 0; j < allEls.length; j++) {
+                    var el2 = allEls[j];
+                    if (el2.offsetHeight === 0) continue;
+                    var t2 = (el2.innerText || '').trim();
+                    if (t2.match(/email/i) && t2.match(/@/i) && t2.length < 100) {
+                        el2.click();
+                        return 'clicked_email_row:' + t2.substring(0, 60);
+                    }
+                }
+                return 'not_found';
+            """)
+            step("verify_email_click", f"Email option: {email_verify_clicked}")
+            time.sleep(5)
+            snap(driver, "after_verify_email_click")
+
+            # Check if code input appeared
+            code_state = driver.execute_script("""
+                var inputs = document.querySelectorAll('input');
+                var codeInputs = [];
+                for (var i = 0; i < inputs.length; i++) {
+                    var inp = inputs[i];
+                    if (inp.offsetHeight === 0) continue;
+                    codeInputs.push({type: inp.type, name: inp.name, ph: inp.placeholder,
+                                     maxLen: inp.maxLength, autocomplete: inp.autocomplete});
+                }
+                var bodyText = document.body.innerText || '';
+                var hasCodeText = bodyText.match(/enter.*code|code.*sent|verification.*code|verify.*code/i) !== null;
+                return {inputs: codeInputs, hasCodeText: hasCodeText,
+                        bodySnippet: bodyText.substring(0, 300)};
+            """)
+            step("verify_code_state", f"Code state: {json.dumps(code_state)[:500]}")
+
+            # Save browser session for code entry
+            _pending_verification[username] = {
+                "driver": driver, "steps": steps, "snap": snap,
+                "email_for_code": username
+            }
+
+            # Try auto-read code via IMAP if email credentials provided
+            email_for_imap = username
+            imap_pass = email_password
+            if email_for_imap and imap_pass:
+                step("imap_reading", f"Attempting to read code from {email_for_imap} via IMAP...")
+                try:
+                    imap_code = _read_tiktok_code_from_imap(email_for_imap, imap_pass, imap_server)
+                    if imap_code:
+                        step("imap_code_found", f"Code from IMAP: {imap_code}")
+                        # Enter the code
+                        code_entered = _enter_verification_code(driver, imap_code)
+                        if code_entered:
+                            time.sleep(5)
+                            snap(driver, "after_code_entry")
+                            # Check if logged in now
+                            driver.get("https://www.tiktok.com/foryou")
+                            time.sleep(5)
+                            has_login_btn = bool(driver.execute_script("""
+                                var els = document.querySelectorAll('button, a, div');
+                                for (var i = 0; i < els.length; i++) {
+                                    var t = (els[i].innerText || '').trim();
+                                    if ((t === 'Log in' || t === 'Login') && els[i].offsetHeight > 0) {
+                                        var rect = els[i].getBoundingClientRect();
+                                        if (rect.top < 100) return true;
+                                    }
+                                }
+                                return false;
+                            """))
+                            if not has_login_btn:
+                                _save_cookies(driver, username)
+                                step("success", "LOGIN SUCCESS after verification code!")
+                                driver.quit()
+                                return {"ok": True, "steps": steps}
+                            step("code_entered_but_not_logged", "Code entered but still not logged in")
+                    else:
+                        step("imap_no_code", "No TikTok code found in email yet")
+                except Exception as e:
+                    step("imap_error", f"IMAP read failed: {e}")
+
+            step("verify_waiting", "Verification code needed. Enter code via bot.")
+            return {"ok": False, "steps": steps, "error": "VERIFICATION_NEEDED",
+                    "verify": True, "needs_code": True}
 
         # Check for REAL captcha UI (not just word in JS code)
         has_captcha = driver.execute_script("""
