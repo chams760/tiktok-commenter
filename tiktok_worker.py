@@ -1751,8 +1751,23 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
 
             body_text = driver.find_element(By.TAG_NAME, "body").text
 
-        # Check for rate limit
-        if "maximum" in body_text.lower() or "too many" in body_text.lower():
+        # Check for rate limit with SPECIFIC phrases (not just "maximum" anywhere in page)
+        _rate_limit_phrases = [
+            "maximum number of attempts",
+            "too many attempts",
+            "too many login attempts",
+            "you've reached the maximum",
+            "try again later",
+            "too fast",
+            "rate limit",
+        ]
+        body_lower = body_text.lower()
+        rate_limited = any(phrase in body_lower for phrase in _rate_limit_phrases)
+        # Also check modal errors for rate limit
+        modal_errors_lower = " ".join(modal_data.get("errors", [])).lower()
+        rate_limited = rate_limited or any(phrase in modal_errors_lower for phrase in _rate_limit_phrases)
+
+        if rate_limited:
             snap(driver, "rate_limited_modal")
             step("rate_limited", f"Rate limited. Body: {body_text[:200]}")
             driver.quit()
@@ -1765,24 +1780,53 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             driver.quit()
             return {"ok": False, "steps": steps, "error": "Wrong username or password"}
 
-        # Now check if actually logged in by reloading
+        # Check if modal is still open (login might still be in progress)
+        modal_still_open = modal_data.get("modalVisible", False)
+        if not modal_still_open:
+            step("modal_closed", "Login modal closed — checking login status...")
+        else:
+            step("modal_still_open", f"Modal still visible. Text: {modal_data.get('modalText', '')[:200]}")
+
+        # Check current URL — if redirected away from homepage, login might have worked
+        current_url = driver.current_url.lower()
+        if "verify" in current_url or "challenge" in current_url:
+            step("verify_redirect", f"Redirected to verification: {driver.current_url}")
+        elif "foryou" in current_url or "/following" in current_url:
+            step("logged_in_redirect", f"Redirected to feed: {driver.current_url}")
+
+        # Now check if actually logged in by reloading /foryou
         time.sleep(3)
         driver.get("https://www.tiktok.com/foryou")
         time.sleep(5)
         body_after = driver.find_element(By.TAG_NAME, "body").text
-        src_after = driver.page_source.lower()
+        snap(driver, "foryou_check")
 
-        has_login_btn = bool(driver.execute_script("""
+        # Check for login status via multiple signals
+        login_status = driver.execute_script("""
+            var result = {hasLoginBtn: false, hasAvatar: false, hasUpload: false, hasFollowing: false};
+            // Check header for "Log in" button
             var els = document.querySelectorAll('button, a, div');
             for (var i = 0; i < els.length; i++) {
                 var t = (els[i].innerText || '').trim();
                 if ((t === 'Log in' || t === 'Login') && els[i].offsetHeight > 0) {
                     var rect = els[i].getBoundingClientRect();
-                    if (rect.top < 100) return true;  // only header login button
+                    if (rect.top < 100) { result.hasLoginBtn = true; break; }
                 }
             }
-            return false;
-        """))
+            // Check for user avatar (logged-in indicator)
+            var avatar = document.querySelector('[data-e2e="profile-icon"], [class*="avatar"], img[class*="ImgAvatar"]');
+            if (avatar && avatar.offsetHeight > 0) result.hasAvatar = true;
+            // Check for upload button (only visible when logged in)
+            var upload = document.querySelector('[data-e2e="upload-icon"], a[href*="upload"]');
+            if (upload && upload.offsetHeight > 0) result.hasUpload = true;
+            // Check sidebar for Following count
+            var following = document.querySelector('[data-e2e="following-page"]');
+            if (following) result.hasFollowing = true;
+            return result;
+        """)
+        step("login_status", f"Status: {json.dumps(login_status)}")
+
+        has_login_btn = login_status.get("hasLoginBtn", True)
 
         if not has_login_btn:
             _save_cookies(driver, username)
@@ -1791,61 +1835,38 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             return {"ok": True, "steps": steps}
 
         # Login failed — check if verification needed
-        if "verify" in body_after.lower() or "code" in body_after.lower():
+        body_after_lower = body_after.lower()
+        if "verify" in body_after_lower or "enter.*code" in body_after_lower:
             step("verify_needed", "Verification page detected after reload")
         else:
-            # Go back and check the login form state
-            driver.back()
-            time.sleep(3)
-            form_state = driver.execute_script("""
-                var inputs = document.querySelectorAll('input');
-                var visible = [];
-                for (var i = 0; i < inputs.length; i++) {
-                    if (inputs[i].offsetHeight > 0 && inputs[i].type !== 'hidden') {
-                        visible.push({
-                            type: inputs[i].type, name: inputs[i].name,
-                            ph: inputs[i].placeholder, val: inputs[i].value ? 'filled' : 'empty'
-                        });
-                    }
+            # Collect comprehensive diagnostics
+            diag = driver.execute_script("""
+                var d = {};
+                // Current cookies related to login
+                var cookies = document.cookie.split(';').map(function(c){ return c.trim().split('=')[0]; });
+                d.loginCookies = cookies.filter(function(c){ return c.match(/sid|session|passport|login|token/i); });
+                // Any visible error/notification elements
+                d.errors = [];
+                var errSels = '[class*="error"], [class*="Error"], [class*="notification"], [class*="toast"], [class*="snack"], [class*="alert"]';
+                var errEls = document.querySelectorAll(errSels);
+                for (var i = 0; i < errEls.length; i++) {
+                    var t = (errEls[i].innerText || '').trim();
+                    if (t && t.length > 2 && t.length < 300 && errEls[i].offsetHeight > 0) d.errors.push(t);
                 }
-                // Check for any error messages
-                var errs = [];
-                var errEls = document.querySelectorAll('[class*="error"], [class*="Error"], [class*="invalid"]');
-                for (var j = 0; j < errEls.length; j++) {
-                    var t = (errEls[j].innerText || '').trim();
-                    if (t && errEls[j].offsetHeight > 0) errs.push(t);
-                }
-                return JSON.stringify({inputs: visible, errors: errs});
+                // Page title
+                d.title = document.title;
+                return JSON.stringify(d);
             """)
-            snap(driver, "login_failed_silent")
-            step("failed_silent", f"Login failed. Form: {form_state} | Modal errors: {modal_data.get('errors', [])}")
+            snap(driver, "login_failed_diag")
+            step("failed_silent", f"Login failed. Diag: {diag} | ModalErrors: {modal_data.get('errors', [])}")
             driver.quit()
-            return {"ok": False, "steps": steps, "error": f"Login failed. Form state: {form_state}"}
-
-        # Check: captcha on login page?
-        page_src = driver.page_source.lower()
-        if "captcha" in page_src or "puzzle" in page_src:
-            snap(driver, "captcha_detected")
-            step("captcha", "CAPTCHA detected. Waiting 5s...")
-            time.sleep(5)
-            body_text = driver.find_element(By.TAG_NAME, "body").text
-            if "login" not in driver.current_url.lower():
-                _save_cookies(driver, username)
-                step("success", "Login success after captcha!")
-                driver.quit()
-                return {"ok": True, "steps": steps}
-
-        # Check rate limit
-        if "maximum" in body_text.lower() or "too many" in body_text.lower():
-            snap(driver, "rate_limited")
-            step("rate_limited", "Account rate limited. Wait 2-4 hours or use a different account/proxy.")
-            driver.quit()
-            return {"ok": False, "steps": steps, "error": "Rate limited — wait 2-4 hours or use different account/proxy"}
+            return {"ok": False, "steps": steps, "error": f"Login failed silently. Diagnostics: {diag}"}
 
         # Step 5: Handle verification page
-        if "verify" not in body_text.lower() and "code" not in body_text.lower():
+        # At this point we know verify was detected in body_after
+        if "verify" not in body_after.lower() and "code" not in body_after.lower():
             snap(driver, "login_failed")
-            step("failed", f"Login failed. Body: {body_text[:300]}")
+            step("failed", f"Login failed. Body: {body_after[:300]}")
             driver.quit()
             return {"ok": False, "steps": steps, "error": "Login failed"}
 
