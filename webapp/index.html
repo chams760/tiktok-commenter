@@ -764,7 +764,7 @@ async function apiSubmitCode() {
         const results = document.getElementById('api-login-results');
 
         if (data.steps) {
-            const newSteps = data.steps.filter(s => s.step.startsWith('manual_') || s.step.startsWith('login_') || s.step.startsWith('verify_'));
+            const newSteps = data.steps.filter(s => s.step.startsWith('manual_') || s.step.startsWith('login_') || s.step.startsWith('verify_') || s.step.startsWith('cookies_') || s.step.startsWith('foryou_') || s.step === 'success' || s.step === 'no_session' || s.step === 'wrong_code' || s.step === 'exception' || s.step.startsWith('inputs_') || s.step.startsWith('code_'));
             results.innerHTML += '<div class="section-label" style="margin-top:12px;">Code verification</div>' +
                 newSteps.map((s, i) => {
                     const isSuccess = s.note && s.note.toLowerCase().includes('success');
