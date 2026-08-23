@@ -88,10 +88,14 @@ def _human_delay(min_s=0.8, max_s=2.5):
 
 
 def _human_type(element, text):
-    for char in text:
+    for i, char in enumerate(text):
         element.send_keys(char)
-        import time; time.sleep(random.uniform(0.02, 0.06))
-    _human_delay(0.2, 0.5)
+        # Variable speed: sometimes pause longer (like a real typist)
+        if random.random() < 0.1:
+            time.sleep(random.uniform(0.15, 0.4))
+        else:
+            time.sleep(random.uniform(0.04, 0.12))
+    _human_delay(0.3, 0.7)
 
 
 def _react_set_value(driver: webdriver.Chrome, element, text: str):
@@ -566,7 +570,9 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-software-rasterizer")
-    options.add_argument("--window-size=1920,1080")
+    _w = random.choice([1366, 1440, 1536, 1680, 1920])
+    _h = random.choice([768, 900, 864, 1050, 1080])
+    options.add_argument(f"--window-size={_w},{_h}")
     options.add_argument(f"--user-agent={UA}")
     options.add_argument("--lang=en-US")
     options.add_argument("--disable-blink-features=AutomationControlled")
@@ -595,7 +601,7 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
 
     service = Service("/usr/local/bin/chromedriver")
     driver = webdriver.Chrome(service=service, options=options)
-    driver.set_window_size(1920, 1080)
+    driver.set_window_size(_w, _h)
 
     # CDP stealth: inject BEFORE any page loads
     try:
@@ -1177,11 +1183,21 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                 driver.quit()
                 return {"ok": False, "steps": steps, "error": f"Proxy failed: {e}"}
 
-        # Step 1: Warm up — visit homepage
+        # Step 1: Warm up — browse like a real user before login
         driver.get("https://www.tiktok.com")
-        time.sleep(4)
+        time.sleep(random.uniform(3, 5))
         _dismiss_cookie_banner(driver)
-        _random_mouse_move(driver, 3)
+
+        # Simulate human browsing: scroll, move mouse, wait
+        _random_mouse_move(driver, random.randint(2, 4))
+        driver.execute_script("window.scrollBy(0, arguments[0])", random.randint(200, 500))
+        time.sleep(random.uniform(1.5, 3.0))
+        driver.execute_script("window.scrollBy(0, arguments[0])", random.randint(-100, 300))
+        _random_mouse_move(driver, random.randint(1, 3))
+        time.sleep(random.uniform(2.0, 4.0))
+        driver.execute_script("window.scrollTo(0, 0)")
+        time.sleep(random.uniform(1.0, 2.0))
+
         step("homepage", f"Homepage visited. Src: {len(driver.page_source)}b")
 
         # Step 2: Navigate to login via UI flow (not direct URL — TikTok blocks direct)
@@ -1223,8 +1239,11 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         snap(driver, "login_modal")
         step("login_modal", f"Login modal/page. URL: {driver.current_url} | Src: {len(driver.page_source)}b")
 
+        # Human pause: look at modal before clicking
+        _random_mouse_move(driver, random.randint(1, 3))
+        time.sleep(random.uniform(2.0, 4.0))
+
         # Now find and click "Email / Username" or "Phone or email" option
-        time.sleep(2)
         email_option_clicked = False
         try:
             result = driver.execute_script("""
@@ -1254,7 +1273,7 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             step("email_option", f"Email option: {result}")
             if result and result.startswith("clicked"):
                 email_option_clicked = True
-                time.sleep(3)
+                time.sleep(random.uniform(2.5, 4.5))
                 _dismiss_cookie_banner(driver)
         except Exception as e:
             step("email_option_fail", str(e))
@@ -1267,7 +1286,8 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             _dismiss_cookie_banner(driver)
 
         # Switch to "Email / Username" tab (default is Phone tab)
-        time.sleep(1)
+        _random_mouse_move(driver, random.randint(1, 2))
+        time.sleep(random.uniform(1.5, 3.0))
         tab_result = "not_attempted"
         try:
             tab_result = driver.execute_script("""
@@ -1330,7 +1350,7 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         except Exception as e:
             tab_result = f"error:{e}"
         step("tab_switch", f"Tab switch: {tab_result}")
-        time.sleep(3)
+        time.sleep(random.uniform(2.0, 4.0))
 
         # Verify we're on the right tab (should see password field or email placeholder)
         tab_check = driver.execute_script("""
@@ -1441,12 +1461,12 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             driver.quit()
             return {"ok": False, "steps": steps, "error": f"Email input not found. Body({len(body_text)}): {body_text[:200]}"}
 
+        _random_mouse_move(driver, 1)
         ActionChains(driver).move_to_element(email_input).click().perform()
-        _human_delay(0.2, 0.4)
+        _human_delay(0.5, 1.2)
         _human_type(email_input, username)
-        # Ensure React state picks up the value via native setter
         _react_set_value(driver, email_input, username)
-        _human_delay(0.3, 0.5)
+        _human_delay(0.8, 1.5)
 
         def _find_pass_input():
             for sel in [
@@ -1532,20 +1552,21 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             driver.quit()
             return {"ok": False, "steps": steps, "error": "Password input not found"}
 
+        _random_mouse_move(driver, 1)
         ActionChains(driver).move_to_element(pass_input).click().perform()
-        _human_delay(0.2, 0.4)
+        _human_delay(0.5, 1.0)
         _human_type(pass_input, password)
-        # Ensure React state picks up the value via native setter
         _react_set_value(driver, pass_input, password)
-        _human_delay(0.3, 0.5)
+        _human_delay(1.0, 2.0)
 
         # Verify both inputs have correct values in DOM
         email_val = driver.execute_script("return arguments[0].value", email_input)
         pass_val = driver.execute_script("return arguments[0].value", pass_input)
         step("credentials", f"Credentials filled. Email={email_val[:3]}*** Pass={'*'*len(pass_val)} ({len(pass_val)} chars)")
 
-        # Step 4: Click login button
-        _human_delay(0.5, 1.0)
+        # Step 4: Click login button — pause like human reading the form
+        _random_mouse_move(driver, random.randint(1, 2))
+        _human_delay(1.5, 3.0)
         login_btn = None
         for btn_sel in [
             'button[data-e2e="login-button"]',
