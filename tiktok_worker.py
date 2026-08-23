@@ -3397,18 +3397,61 @@ def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: s
         _dismiss_cookie_banner(driver)
 
         # Watch video for a moment (human behavior)
-        _human_delay(2, 4)
+        _human_delay(2, 3)
 
-        # Find and click the comment input area
-        # On video page, comment input is usually at the bottom
+        # Step 1: Click the comment icon to open comment panel
+        icon_result = driver.execute_script("""
+            // Check if comment input is already visible
+            var existing = document.querySelector('[contenteditable="true"]');
+            if (existing && existing.offsetHeight > 0 && existing.offsetWidth > 20) {
+                var ph = (existing.getAttribute('data-placeholder') || '').toLowerCase();
+                if (ph.indexOf('comment') !== -1 || ph.indexOf('add') !== -1) return 'already_visible';
+            }
+
+            // Click comment icon
+            var iconSels = [
+                '[data-e2e="comment-icon"]',
+                '[data-e2e="browse-comment-icon"]',
+                'button[aria-label*="comment" i]',
+                'span[data-e2e="comment-icon"]',
+                '[data-e2e="comment-count"]',
+            ];
+            for (var s = 0; s < iconSels.length; s++) {
+                var el = document.querySelector(iconSels[s]);
+                if (el && el.offsetHeight > 0) {
+                    el.click();
+                    return 'icon:' + iconSels[s];
+                }
+            }
+
+            // Try aria-label containing "comment"
+            var all = document.querySelectorAll('button, span, div');
+            for (var i = 0; i < all.length; i++) {
+                if (all[i].offsetHeight === 0) continue;
+                var aria = (all[i].getAttribute('aria-label') || '').toLowerCase();
+                if (aria.indexOf('comment') !== -1 && aria.indexOf('input') === -1) {
+                    all[i].click();
+                    return 'aria:' + aria.substring(0, 30);
+                }
+            }
+            return 'no_icon';
+        """)
+        logger.info(f"Comment icon: {icon_result}")
+
+        if icon_result == 'no_icon':
+            snap(driver, "no_comment_icon")
+            return False, "no_comment_icon"
+
+        if icon_result != 'already_visible':
+            _human_delay(2, 3)
+
+        # Step 2: Click on comment input area / placeholder
         clicked = driver.execute_script("""
-            // Try clicking on comment input container or placeholder
             var sels = [
                 '[data-e2e="comment-input"]',
                 '[class*="DraftEditor"]',
                 '[class*="CommentInput"]',
                 '[class*="comment-input"]',
-                '[contenteditable="true"]',
             ];
             for (var s = 0; s < sels.length; s++) {
                 var els = document.querySelectorAll(sels[s]);
@@ -3419,26 +3462,30 @@ def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: s
                     }
                 }
             }
-            // Try placeholder text
-            var all = document.querySelectorAll('div, span, p');
+            // Click any placeholder with "comment" text
+            var all = document.querySelectorAll('div, span');
             for (var j = 0; j < all.length; j++) {
                 var el = all[j];
-                if (el.offsetHeight === 0) continue;
-                var ph = (el.getAttribute('data-placeholder') || el.textContent || '').toLowerCase();
-                if ((ph.indexOf('add a comment') !== -1 || ph.indexOf('add comment') !== -1) && el.offsetHeight < 100) {
+                if (el.offsetHeight === 0 || el.offsetHeight > 100) continue;
+                var t = (el.getAttribute('data-placeholder') || el.textContent || '').toLowerCase();
+                if (t.indexOf('add a comment') !== -1 || t.indexOf('add comment') !== -1) {
                     el.click();
                     return 'clicked:placeholder';
                 }
             }
+            // Click any contenteditable
+            var ce = document.querySelectorAll('[contenteditable="true"]');
+            for (var k = 0; k < ce.length; k++) {
+                if (ce[k].offsetHeight > 0 && ce[k].offsetWidth > 20) {
+                    ce[k].click();
+                    return 'clicked:contenteditable';
+                }
+            }
             return 'not_found';
         """)
-        logger.info(f"Comment area click: {clicked}")
+        logger.info(f"Comment input click: {clicked}")
 
-        if clicked == 'not_found':
-            snap(driver, "no_comment_area")
-            return False, "no_comment_area"
-
-        _human_delay(1, 2)
+        _human_delay(1, 1.5)
 
         # Click again on contenteditable to ensure focus
         driver.execute_script("""
