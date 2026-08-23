@@ -2040,7 +2040,7 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                         if (dt.indexOf('verify') < 0 || dialogs[d].offsetHeight === 0) continue;
 
                         // Strategy 1: find the SMALLEST element containing masked email
-                        var children = dialogs[d].getElementsByTagName('*');
+                        var children = dialogs[d].querySelectorAll('div,span,a,p,button,li,section');
                         var best = null;
                         var bestArea = Infinity;
                         for (var i = 0; i < children.length; i++) {
@@ -2165,7 +2165,7 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                             target.dispatchEvent(ev);
                         }
                         var targets = [el];
-                        var kids = el.querySelectorAll('*');
+                        var kids = el.querySelectorAll('div,span,a,p,button,li');
                         for (var i = 0; i < kids.length; i++) {
                             if (kids[i].offsetHeight > 0) targets.push(kids[i]);
                         }
@@ -2196,59 +2196,63 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                 step("verify_retry_result", f"Dialog changed: {dialog_changed}")
 
             if not dialog_changed:
-                step("verify_retry2", "Trying coordinate-based Selenium clicks on verify dialog email area")
+                step("verify_retry2", "Trying JS React-event clicks on each email row candidate")
                 try:
-                    click_results = driver.execute_script("""
+                    js_click_result = driver.execute_script("""
                         var star = String.fromCharCode(42);
+                        function fullClick(el) {
+                            var r = el.getBoundingClientRect();
+                            var cx = r.left + r.width / 2;
+                            var cy = r.top + r.height / 2;
+                            var opts = {bubbles:true, cancelable:true, view:window, clientX:cx, clientY:cy};
+                            el.dispatchEvent(new PointerEvent('pointerdown', opts));
+                            el.dispatchEvent(new MouseEvent('mousedown', opts));
+                            el.dispatchEvent(new PointerEvent('pointerup', opts));
+                            el.dispatchEvent(new MouseEvent('mouseup', opts));
+                            el.dispatchEvent(new MouseEvent('click', opts));
+                        }
                         var dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="verify"], [class*="IDV"]');
-                        var results = [];
+                        var clicked = [];
                         for (var d = 0; d < dialogs.length; d++) {
                             var dt = (dialogs[d].innerText || '').toLowerCase();
                             if (dt.indexOf('verify') < 0 || dialogs[d].offsetHeight === 0) continue;
-                            var children = dialogs[d].getElementsByTagName('*');
+                            var children = dialogs[d].querySelectorAll('div,span,a,p,button,li');
+                            // Collect candidates sorted by area (smallest first = most specific)
+                            var cands = [];
                             for (var i = 0; i < children.length; i++) {
                                 var el = children[i];
                                 if (el.offsetHeight === 0 || el.offsetHeight > 150) continue;
                                 var t = (el.innerText || '').trim();
-                                // Collect all clickable-looking elements in the email row area
                                 if ((t.indexOf(star) >= 0 && t.indexOf('@') >= 0 && t.length < 80
                                      && t.toLowerCase().indexOf('verify') < 0)
                                     || (t === 'Email')
                                     || (el.textContent.trim() === 'Email' && el.children.length === 0)) {
-                                    var r = el.getBoundingClientRect();
-                                    results.push({
-                                        tag: el.tagName, cls: (el.className||'').substring(0,60),
-                                        text: t.substring(0,40), x: Math.round(r.left + r.width/2),
-                                        y: Math.round(r.top + r.height/2), w: el.offsetWidth, h: el.offsetHeight
-                                    });
+                                    cands.push({el:el, area: el.offsetWidth * el.offsetHeight,
+                                        tag: el.tagName, text: t.substring(0,30)});
                                 }
                             }
+                            cands.sort(function(a,b){return a.area - b.area;});
+                            // Click each candidate with full event sequence
+                            for (var c = 0; c < cands.length && c < 6; c++) {
+                                fullClick(cands[c].el);
+                                clicked.push(cands[c].tag + ':' + cands[c].text.substring(0,20));
+                            }
                         }
-                        return results;
+                        return clicked;
                     """)
-                    step("verify_candidates", f"Found {len(click_results)} candidates: {json.dumps(click_results[:5])}")
-
-                    for idx, cand in enumerate(click_results[:5]):
-                        try:
-                            ActionChains(driver).move_by_offset(cand['x'] - 0, cand['y'] - 0).click().perform()
-                            ActionChains(driver).move_by_offset(-cand['x'], -cand['y']).perform()
-                            time.sleep(2)
-                            changed = driver.execute_script("""
-                                var dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="verify"]');
-                                for (var d = 0; d < dialogs.length; d++) {
-                                    var dt = (dialogs[d].innerText || '').toLowerCase();
-                                    if (dt.indexOf('send code') >= 0 || dt.indexOf('send a code') >= 0
-                                        || dt.indexOf('enter code') >= 0 || dt.indexOf('enter the code') >= 0
-                                        || dt.indexOf('verification code') >= 0) return true;
-                                }
-                                return false;
-                            """)
-                            step("verify_coord_click", f"Candidate {idx} ({cand['tag']} '{cand['text'][:20]}') at ({cand['x']},{cand['y']}): changed={changed}")
-                            if changed:
-                                dialog_changed = True
-                                break
-                        except Exception as e:
-                            step("verify_coord_err", f"Candidate {idx}: {type(e).__name__}")
+                    step("verify_js_clicks", f"Clicked {len(js_click_result)} elements: {js_click_result}")
+                    time.sleep(3)
+                    dialog_changed = driver.execute_script("""
+                        var dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="verify"]');
+                        for (var d = 0; d < dialogs.length; d++) {
+                            var dt = (dialogs[d].innerText || '').toLowerCase();
+                            if (dt.indexOf('send code') >= 0 || dt.indexOf('send a code') >= 0
+                                || dt.indexOf('enter code') >= 0 || dt.indexOf('enter the code') >= 0
+                                || dt.indexOf('verification code') >= 0) return true;
+                        }
+                        return false;
+                    """)
+                    step("verify_retry2_result", f"Dialog changed: {dialog_changed}")
                 except Exception as e:
                     step("verify_retry2_err", f"Retry2 error: {type(e).__name__}: {e}")
 
