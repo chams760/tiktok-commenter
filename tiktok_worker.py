@@ -20,10 +20,12 @@ import config
 import database as db
 
 
-SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), "screenshots")
+_PERSIST_DIR = "/app/data" if os.path.isdir("/app/data") else os.path.dirname(__file__)
+
+SCREENSHOTS_DIR = os.path.join(_PERSIST_DIR, "screenshots")
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 
-SESSIONS_DIR = os.path.join(os.path.dirname(__file__), "sessions")
+SESSIONS_DIR = os.path.join(_PERSIST_DIR, "sessions")
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 
 _executor = ThreadPoolExecutor(max_workers=3)

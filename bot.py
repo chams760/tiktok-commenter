@@ -10,7 +10,9 @@ from loguru import logger
 
 logger.remove()
 logger.add(sys.stderr, level="INFO")
-logger.add("logs/bot_{time}.log", rotation="1 day", retention="7 days", level="INFO")
+_log_dir = "/app/data/logs" if os.path.isdir("/app/data") else "logs"
+os.makedirs(_log_dir, exist_ok=True)
+logger.add(f"{_log_dir}/bot_{{time}}.log", rotation="1 day", retention="7 days", level="INFO")
 
 # Temporary storage for credentials of accounts awaiting verification
 _pending_credentials = {}
