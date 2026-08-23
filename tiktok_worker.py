@@ -3144,21 +3144,77 @@ def _browser_enter_code_ui(driver, username: str, code: str, steps: list) -> dic
         except Exception:
             pass
 
-        if "login" not in driver.current_url.lower():
-            _save_cookies(driver, username)
-            step("success", "LOGIN SUCCESS after code entry!")
-            driver.quit()
-            return {"ok": True, "steps": steps}
-
-        body_text = driver.find_element(By.TAG_NAME, "body").text
+        # Check for wrong code first
+        try:
+            body_text = driver.find_element(By.TAG_NAME, "body").text
+        except Exception:
+            body_text = ""
         if "incorrect" in body_text.lower() or "invalid" in body_text.lower() or "wrong" in body_text.lower():
             step("wrong_code", "Wrong code entered")
             driver.quit()
             return {"ok": False, "steps": steps, "error": "Wrong verification code"}
 
-        step("still_login", f"Still on login page. Body: {body_text[:300]}")
+        # Verify login by checking session cookies
+        try:
+            cookies = driver.get_cookies()
+            cookie_names = [c["name"] for c in cookies]
+            session_cookies = [n for n in cookie_names if n in ("sessionid", "sid_tt", "uid_tt", "sid_guard")]
+            step("cookies_after_code", f"Session cookies: {session_cookies} | Total: {len(cookies)}")
+
+            if "sessionid" in cookie_names or "sid_tt" in cookie_names:
+                _save_cookies(driver, username)
+                step("success", "LOGIN SUCCESS — session cookies confirmed after code!")
+                driver.quit()
+                return {"ok": True, "steps": steps}
+        except Exception as e:
+            step("cookies_error", f"Cookie check failed: {e}")
+
+        # Wait more and retry cookie check — TikTok can be slow
+        _human_delay(5, 8)
+        try:
+            cookies = driver.get_cookies()
+            cookie_names = [c["name"] for c in cookies]
+            session_cookies = [n for n in cookie_names if n in ("sessionid", "sid_tt", "uid_tt", "sid_guard")]
+            step("cookies_retry", f"Session cookies retry: {session_cookies} | Total: {len(cookies)}")
+
+            if "sessionid" in cookie_names or "sid_tt" in cookie_names:
+                _save_cookies(driver, username)
+                step("success", "LOGIN SUCCESS — session cookies confirmed on retry!")
+                driver.quit()
+                return {"ok": True, "steps": steps}
+        except Exception:
+            pass
+
+        # Try navigating to /foryou to trigger session
+        try:
+            driver.get("https://www.tiktok.com/foryou")
+            _human_delay(5, 8)
+            cookies = driver.get_cookies()
+            cookie_names = [c["name"] for c in cookies]
+            has_login_btn = driver.execute_script("""
+                var els = document.querySelectorAll('button, a, div');
+                for (var i = 0; i < els.length; i++) {
+                    var t = (els[i].innerText || '').trim();
+                    if ((t === 'Log in' || t === 'Login') && els[i].offsetHeight > 0) {
+                        var rect = els[i].getBoundingClientRect();
+                        if (rect.top < 100) return true;
+                    }
+                }
+                return false;
+            """)
+            step("foryou_check", f"Login btn: {has_login_btn} | Cookies: {[n for n in cookie_names if n in ('sessionid','sid_tt')]}")
+
+            if ("sessionid" in cookie_names or "sid_tt" in cookie_names) or not has_login_btn:
+                _save_cookies(driver, username)
+                step("success", "LOGIN SUCCESS after /foryou navigation!")
+                driver.quit()
+                return {"ok": True, "steps": steps}
+        except Exception as e:
+            step("foryou_error", f"Navigation failed: {e}")
+
+        step("no_session", f"No session cookies found — login did not complete. Body: {body_text[:300]}")
         driver.quit()
-        return {"ok": False, "steps": steps, "error": "Verification did not complete"}
+        return {"ok": False, "steps": steps, "error": "Login did not complete — no session cookies"}
 
     except Exception as e:
         step("exception", str(e))
