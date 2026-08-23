@@ -12,6 +12,9 @@ logger.remove()
 logger.add(sys.stderr, level="INFO")
 logger.add("logs/bot_{time}.log", rotation="1 day", retention="7 days", level="INFO")
 
+# Temporary storage for credentials of accounts awaiting verification
+_pending_credentials = {}
+
 
 async def health_handler(request):
     try:
@@ -222,6 +225,27 @@ async def api_login(request):
             return web.json_response({"error": "username required"}, status=400)
 
         result = await browser_fetch_login(username, password, proxy, email_password, imap_server, sms_api_key)
+
+        # Auto-add account to database on successful login
+        if result.get("ok") and not account_id:
+            try:
+                existing = await db.get_accounts()
+                already_exists = any(a["username"] == username for a in existing)
+                if not already_exists:
+                    await db.add_accounts([(username, password, proxy, email_password, imap_server)])
+                    logger.info(f"Account {username} auto-added to database after login")
+                    result["account_added"] = True
+                _pending_credentials.pop(username, None)
+            except Exception as e:
+                logger.error(f"Failed to auto-add account: {e}")
+        elif result.get("verify") or result.get("needs_code") or result.get("need_code"):
+            _pending_credentials[username] = {
+                "password": password,
+                "proxy": proxy,
+                "email_password": email_password,
+                "imap_server": imap_server,
+            }
+
         return web.json_response(result)
     except Exception as e:
         logger.error(f"API login error: {e}")
@@ -230,6 +254,7 @@ async def api_login(request):
 
 async def api_submit_code(request):
     try:
+        import database as db
         from tiktok_worker import browser_submit_manual_code
         data = await request.json()
         username = data.get("username", "").strip()
@@ -237,6 +262,19 @@ async def api_submit_code(request):
         if not username or not code:
             return web.json_response({"error": "username and code required"}, status=400)
         result = await browser_submit_manual_code(username, code)
+
+        if result.get("ok") and username in _pending_credentials:
+            try:
+                creds = _pending_credentials.pop(username)
+                existing = await db.get_accounts()
+                already_exists = any(a["username"] == username for a in existing)
+                if not already_exists:
+                    await db.add_accounts([(username, creds["password"], creds["proxy"], creds["email_password"], creds["imap_server"])])
+                    logger.info(f"Account {username} auto-added after code verification")
+                    result["account_added"] = True
+            except Exception as e:
+                logger.error(f"Failed to auto-add account after code: {e}")
+
         return web.json_response(result)
     except Exception as e:
         logger.error(f"Submit code error: {e}")
@@ -292,6 +330,7 @@ async def api_import_cookies(request):
 
 async def api_verify_code(request):
     try:
+        import database as db
         from tiktok_worker import submit_verification_code
         data = await request.json()
         username = data.get("username", "").strip()
@@ -299,7 +338,21 @@ async def api_verify_code(request):
         if not username or not code:
             return web.json_response({"error": "username and code required"}, status=400)
         steps = await submit_verification_code(username, code)
-        return web.json_response({"ok": True, "steps": steps})
+        result = {"ok": True, "steps": steps}
+
+        if username in _pending_credentials:
+            try:
+                creds = _pending_credentials.pop(username)
+                existing = await db.get_accounts()
+                already_exists = any(a["username"] == username for a in existing)
+                if not already_exists:
+                    await db.add_accounts([(username, creds["password"], creds["proxy"], creds["email_password"], creds["imap_server"])])
+                    logger.info(f"Account {username} auto-added after verify-code")
+                    result["account_added"] = True
+            except Exception as e:
+                logger.error(f"Failed to auto-add account after verify: {e}")
+
+        return web.json_response(result)
     except Exception as e:
         logger.error(f"Verify code error: {e}")
         return web.json_response({"error": str(e)}, status=500)
