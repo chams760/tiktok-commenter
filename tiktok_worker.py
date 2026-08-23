@@ -990,7 +990,8 @@ def _test_login_sync(username: str, password: str, proxy: str = "", email_passwo
             return steps
         else:
             note = "LOGIN FAILED - still on login page."
-            if "maximum" in body_text.lower() or "too many" in body_text.lower():
+            body_lower_check = body_text.lower()
+            if any(p in body_lower_check for p in ["maximum number", "too many attempts", "try again later"]):
                 note += " RATE LIMITED: Too many attempts."
             page_src = driver.page_source.lower()
             if "captcha" in page_src or "puzzle" in page_src:
@@ -1751,25 +1752,35 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
 
             body_text = driver.find_element(By.TAG_NAME, "body").text
 
-        # Check for rate limit with SPECIFIC phrases (not just "maximum" anywhere in page)
-        _rate_limit_phrases = [
-            "maximum number of attempts",
-            "too many attempts",
-            "too many login attempts",
-            "you've reached the maximum",
-            "try again later",
-            "too fast",
-            "rate limit",
-        ]
-        body_lower = body_text.lower()
-        rate_limited = any(phrase in body_lower for phrase in _rate_limit_phrases)
-        # Also check modal errors for rate limit
-        modal_errors_lower = " ".join(modal_data.get("errors", [])).lower()
-        rate_limited = rate_limited or any(phrase in modal_errors_lower for phrase in _rate_limit_phrases)
+        # Check for rate limit ONLY inside login modal/overlay, not in page content
+        rate_limit_info = driver.execute_script("""
+            var phrases = [
+                'maximum number', 'too many attempts', 'too many login',
+                'try again later', 'too fast', 'rate limit',
+                'you\\'ve reached', 'exceeded'
+            ];
+            // Only check inside modal/dialog/overlay areas
+            var containers = document.querySelectorAll(
+                '[role="dialog"], [class*="modal"], [class*="Modal"], '
+                + '[class*="overlay"], [class*="Overlay"], [class*="toast"], '
+                + '[class*="notification"], [class*="alert"], [class*="error"], '
+                + '[class*="snackbar"]'
+            );
+            for (var i = 0; i < containers.length; i++) {
+                var t = (containers[i].innerText || '').toLowerCase();
+                if (containers[i].offsetHeight === 0) continue;
+                for (var j = 0; j < phrases.length; j++) {
+                    if (t.includes(phrases[j])) {
+                        return {found: true, text: t.substring(0, 200), phrase: phrases[j]};
+                    }
+                }
+            }
+            return {found: false};
+        """)
 
-        if rate_limited:
+        if rate_limit_info and rate_limit_info.get("found"):
             snap(driver, "rate_limited_modal")
-            step("rate_limited", f"Rate limited. Body: {body_text[:200]}")
+            step("rate_limited", f"Rate limited. Match: {rate_limit_info.get('phrase')} | Text: {rate_limit_info.get('text', '')[:200]}")
             driver.quit()
             return {"ok": False, "steps": steps, "error": "Rate limited — wait 2-4 hours"}
 
@@ -2198,7 +2209,8 @@ def _login_account_sync(driver: webdriver.Chrome, username: str, password: str) 
             return True
 
         body_text = driver.find_element(By.TAG_NAME, "body").text
-        if "maximum" in body_text.lower() or "too many" in body_text.lower():
+        body_lower_rl = body_text.lower()
+        if any(p in body_lower_rl for p in ["maximum number", "too many attempts", "try again later"]):
             logger.error(f"Rate limit для {username}")
         else:
             logger.warning(f"Не удалось войти: {username}")
