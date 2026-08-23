@@ -2006,82 +2006,32 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             snap(driver, "verify_after_login")
 
             # Click "Email" option in verification dialog
-            # TikTok uses clickable row containers — need to find the right ancestor
-            email_verify_clicked = driver.execute_script("""
-                // Find the verification dialog
-                var verifyDialog = null;
-                var dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="verify"]');
-                for (var d = 0; d < dialogs.length; d++) {
-                    var dt = (dialogs[d].innerText || '').toLowerCase();
-                    if (dt.includes('verify') && dt.includes('email') && dialogs[d].offsetHeight > 0) {
-                        verifyDialog = dialogs[d];
-                        break;
-                    }
-                }
-                if (!verifyDialog) verifyDialog = document.body;
-
-                // Find elements containing email/@ text inside the verify dialog
-                var allEls = verifyDialog.querySelectorAll('*');
-                var emailEls = [];
-                for (var i = 0; i < allEls.length; i++) {
-                    var el = allEls[i];
-                    if (el.offsetHeight === 0 || el.children.length > 3) continue;
-                    var t = (el.innerText || '').trim().toLowerCase();
-                    // Match the email row: "Email\ns***3@..." or just "s***3@..."
-                    if ((t.includes('@') && t.includes('*') && t.length < 80)
-                        || (t === 'email' && el.offsetHeight > 20)) {
-                        emailEls.push({el: el, text: t, tag: el.tagName, depth: 0});
-                    }
-                }
-
-                // For each match, walk up to find the clickable row container
-                for (var j = 0; j < emailEls.length; j++) {
-                    var target = emailEls[j].el;
-                    // Walk up max 5 levels to find a clickable container
-                    for (var k = 0; k < 5; k++) {
-                        var parent = target.parentElement;
-                        if (!parent || parent === verifyDialog || parent === document.body) break;
-                        var style = window.getComputedStyle(parent);
-                        // Check if parent is a clickable row
-                        if (style.cursor === 'pointer' || parent.getAttribute('role') === 'button'
-                            || parent.tagName === 'A' || parent.tagName === 'BUTTON'
-                            || parent.onclick || parent.getAttribute('tabindex')) {
-                            target = parent;
-                            break;
-                        }
-                        target = parent;
-                    }
-                    // Click the found target
-                    target.click();
-                    return 'clicked:' + (target.innerText || '').trim().substring(0, 60) + ' (tag:' + target.tagName + ')';
-                }
-                return 'not_found';
-            """)
-            step("verify_email_click", f"Email option (JS): {email_verify_clicked}")
-
-            # Also try ActionChains physical click on the email row element
+            # Use ActionChains for physical click — JS click often doesn't work on TikTok's React components
+            email_row_el = None
             try:
                 email_row_el = driver.execute_script("""
-                    // Find the verify dialog
-                    var dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"]');
+                    var star = String.fromCharCode(42);
+                    var dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="verify"]');
                     for (var d = 0; d < dialogs.length; d++) {
                         var dt = (dialogs[d].innerText || '').toLowerCase();
-                        if (!dt.includes('verify') || dialogs[d].offsetHeight === 0) continue;
-                        // Find email row inside this dialog
-                        var allEls = dialogs[d].querySelectorAll('*');
-                        for (var i = 0; i < allEls.length; i++) {
-                            var el = allEls[i];
+                        if (dt.indexOf('verify') < 0 || dialogs[d].offsetHeight === 0) continue;
+                        var children = dialogs[d].getElementsByTagName('div');
+                        for (var i = 0; i < children.length; i++) {
+                            var el = children[i];
                             if (el.offsetHeight === 0) continue;
                             var t = (el.innerText || '').trim();
-                            if (t.indexOf('@') >= 0 && t.indexOf('*') >= 0 && t.length < 50) {
-                                // Walk up to find the clickable row
+                            if (t.indexOf('@') >= 0 && t.indexOf(star) >= 0 && t.length < 60) {
                                 var target = el;
                                 for (var k = 0; k < 5; k++) {
                                     var p = target.parentElement;
-                                    if (!p || p === dialogs[d]) break;
+                                    if (!p || p === dialogs[d] || p === document.body) break;
+                                    var cs = window.getComputedStyle(p);
+                                    if (cs.cursor === 'pointer' || p.getAttribute('role') === 'button'
+                                        || p.tagName === 'A' || p.tagName === 'BUTTON') {
+                                        target = p;
+                                        break;
+                                    }
                                     target = p;
-                                    var cs = window.getComputedStyle(target);
-                                    if (cs.cursor === 'pointer') break;
                                 }
                                 return target;
                             }
@@ -2089,13 +2039,23 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
                     }
                     return null;
                 """)
-                if email_row_el:
-                    ActionChains(driver).move_to_element(email_row_el).click().perform()
-                    step("verify_email_click_ac", "ActionChains click on email row")
-                else:
-                    step("verify_email_click_ac", "Email row element not found for AC click")
             except Exception as e:
-                step("verify_email_click_ac", f"AC click error: {e}")
+                step("verify_find_error", f"Error finding email row: {e}")
+
+            if email_row_el:
+                try:
+                    ActionChains(driver).move_to_element(email_row_el).click().perform()
+                    email_text = driver.execute_script("return (arguments[0].innerText || '').trim().substring(0, 60)", email_row_el)
+                    step("verify_email_click", f"Clicked email row via ActionChains: {email_text}")
+                except Exception as e:
+                    step("verify_email_click", f"ActionChains click failed: {e}")
+                    try:
+                        driver.execute_script("arguments[0].click()", email_row_el)
+                        step("verify_email_click_js", "Fallback JS click on email row")
+                    except Exception:
+                        pass
+            else:
+                step("verify_email_click", "Email row element not found in verify dialog")
 
             time.sleep(3)
             snap(driver, "after_verify_email_click")
