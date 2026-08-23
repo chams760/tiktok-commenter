@@ -2005,81 +2005,137 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             step("verify_detected", "Verification/challenge detected after login click!")
             snap(driver, "verify_after_login")
 
-            # Click "Email" option in verification dialog to send code
+            # Click "Email" option in verification dialog
+            # TikTok uses clickable row containers — need to find the right ancestor
             email_verify_clicked = driver.execute_script("""
-                var allEls = document.querySelectorAll('div, span, a, button, p, label');
-                for (var i = 0; i < allEls.length; i++) {
-                    var el = allEls[i];
-                    if (el.offsetHeight === 0) continue;
-                    var t = (el.innerText || '').trim().toLowerCase();
-                    // Match "Email" option or masked email like "s***3@..."
-                    if ((t === 'email' || t.match(/^e-?mail$/i)
-                         || t.match(/^[a-z]\\*+.*@/i)
-                         || t.match(/email\\s+[a-z]\\*+.*@/i))
-                        && t.length < 80) {
-                        // Click the element or its parent (might be a clickable row)
-                        var clickTarget = el;
-                        if (el.tagName === 'SPAN' || el.tagName === 'P') {
-                            var parent = el.parentElement;
-                            if (parent && parent.offsetHeight > 0) clickTarget = parent;
-                        }
-                        clickTarget.click();
-                        return 'clicked:' + t;
+                // Find the verification dialog
+                var verifyDialog = null;
+                var dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="verify"]');
+                for (var d = 0; d < dialogs.length; d++) {
+                    var dt = (dialogs[d].innerText || '').toLowerCase();
+                    if (dt.includes('verify') && dt.includes('email') && dialogs[d].offsetHeight > 0) {
+                        verifyDialog = dialogs[d];
+                        break;
                     }
                 }
-                // Try clicking elements that contain the email pattern
-                for (var j = 0; j < allEls.length; j++) {
-                    var el2 = allEls[j];
-                    if (el2.offsetHeight === 0) continue;
-                    var t2 = (el2.innerText || '').trim();
-                    if (t2.match(/email/i) && t2.match(/@/i) && t2.length < 100) {
-                        el2.click();
-                        return 'clicked_email_row:' + t2.substring(0, 60);
+                if (!verifyDialog) verifyDialog = document.body;
+
+                // Find elements containing email/@ text inside the verify dialog
+                var allEls = verifyDialog.querySelectorAll('*');
+                var emailEls = [];
+                for (var i = 0; i < allEls.length; i++) {
+                    var el = allEls[i];
+                    if (el.offsetHeight === 0 || el.children.length > 3) continue;
+                    var t = (el.innerText || '').trim().toLowerCase();
+                    // Match the email row: "Email\ns***3@..." or just "s***3@..."
+                    if ((t.includes('@') && t.includes('*') && t.length < 80)
+                        || (t === 'email' && el.offsetHeight > 20)) {
+                        emailEls.push({el: el, text: t, tag: el.tagName, depth: 0});
                     }
+                }
+
+                // For each match, walk up to find the clickable row container
+                for (var j = 0; j < emailEls.length; j++) {
+                    var target = emailEls[j].el;
+                    // Walk up max 5 levels to find a clickable container
+                    for (var k = 0; k < 5; k++) {
+                        var parent = target.parentElement;
+                        if (!parent || parent === verifyDialog || parent === document.body) break;
+                        var style = window.getComputedStyle(parent);
+                        // Check if parent is a clickable row
+                        if (style.cursor === 'pointer' || parent.getAttribute('role') === 'button'
+                            || parent.tagName === 'A' || parent.tagName === 'BUTTON'
+                            || parent.onclick || parent.getAttribute('tabindex')) {
+                            target = parent;
+                            break;
+                        }
+                        target = parent;
+                    }
+                    // Click the found target
+                    target.click();
+                    return 'clicked:' + (target.innerText || '').trim().substring(0, 60) + ' (tag:' + target.tagName + ')';
                 }
                 return 'not_found';
             """)
-            step("verify_email_click", f"Email option: {email_verify_clicked}")
+            step("verify_email_click", f"Email option (JS): {email_verify_clicked}")
+
+            # Also try ActionChains physical click on the email row element
+            try:
+                email_row_el = driver.execute_script("""
+                    // Find the verify dialog
+                    var dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"]');
+                    for (var d = 0; d < dialogs.length; d++) {
+                        var dt = (dialogs[d].innerText || '').toLowerCase();
+                        if (!dt.includes('verify') || dialogs[d].offsetHeight === 0) continue;
+                        // Find email row inside this dialog
+                        var allEls = dialogs[d].querySelectorAll('*');
+                        for (var i = 0; i < allEls.length; i++) {
+                            var el = allEls[i];
+                            if (el.offsetHeight === 0) continue;
+                            var t = (el.innerText || '').trim();
+                            if (t.match(/@/) && t.match(/\\*/) && t.length < 50) {
+                                // Walk up to find the clickable row
+                                var target = el;
+                                for (var k = 0; k < 5; k++) {
+                                    var p = target.parentElement;
+                                    if (!p || p === dialogs[d]) break;
+                                    target = p;
+                                    var cs = window.getComputedStyle(target);
+                                    if (cs.cursor === 'pointer') break;
+                                }
+                                return target;
+                            }
+                        }
+                    }
+                    return null;
+                """)
+                if email_row_el:
+                    ActionChains(driver).move_to_element(email_row_el).click().perform()
+                    step("verify_email_click_ac", "ActionChains click on email row")
+                else:
+                    step("verify_email_click_ac", "Email row element not found for AC click")
+            except Exception as e:
+                step("verify_email_click_ac", f"AC click error: {e}")
+
             time.sleep(3)
             snap(driver, "after_verify_email_click")
 
-            # After clicking email option, TikTok may show "Send code" button
+            # After clicking email option, check what changed + click Send/Next
+            time.sleep(2)
             send_code_result = driver.execute_script("""
-                // Check what's visible now in dialogs
+                // Check what's visible now in ALL dialogs
                 var dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="overlay"], [class*="verify"]');
                 var dialogTexts = [];
                 for (var d = 0; d < dialogs.length; d++) {
                     if (dialogs[d].offsetHeight > 0) {
-                        dialogTexts.push((dialogs[d].innerText || '').substring(0, 200));
+                        dialogTexts.push((dialogs[d].innerText || '').substring(0, 300));
                     }
                 }
 
-                // Click "Send code" / "Send" / "Next" / "Continue" / "Verify" button
-                var btns = document.querySelectorAll('button, div[role="button"], a');
-                for (var i = 0; i < btns.length; i++) {
-                    var btn = btns[i];
+                // Look for any clickable action button in dialogs
+                var clickPatterns = [
+                    /^send$/i, /^send code$/i, /send.*code/i, /^next$/i,
+                    /^continue$/i, /^verify$/i, /^confirm$/i, /^get code$/i,
+                    /^submit$/i, /^ok$/i, /^yes$/i, /^done$/i,
+                    /отправить/i, /далее/i, /подтвердить/i
+                ];
+                var allClickable = document.querySelectorAll('button, div[role="button"], a, [tabindex], [class*="btn"], [class*="Btn"]');
+                for (var i = 0; i < allClickable.length; i++) {
+                    var btn = allClickable[i];
                     if (btn.offsetHeight === 0 || btn.disabled) continue;
-                    var t = (btn.innerText || '').trim().toLowerCase();
-                    if (t.match(/^(send|send code|send verification|next|continue|verify|confirm|get code|отправить)$/i)
-                        || t.match(/send.*code/i)) {
-                        btn.click();
-                        return JSON.stringify({clicked: t, dialogs: dialogTexts});
+                    var t = (btn.innerText || '').trim();
+                    if (t.length > 30) continue;
+                    for (var p = 0; p < clickPatterns.length; p++) {
+                        if (t.match(clickPatterns[p])) {
+                            btn.click();
+                            return JSON.stringify({clicked: t, tag: btn.tagName, dialogs: dialogTexts});
+                        }
                     }
                 }
 
-                // Also try clickable divs/spans with "send" text
-                var allEls = document.querySelectorAll('div, span, a, p');
-                for (var j = 0; j < allEls.length; j++) {
-                    var el = allEls[j];
-                    if (el.offsetHeight === 0) continue;
-                    var et = (el.innerText || '').trim().toLowerCase();
-                    if (et.match(/^(send code|send|get code)$/i) && et.length < 20) {
-                        el.click();
-                        return JSON.stringify({clicked: et, dialogs: dialogTexts});
-                    }
-                }
-
-                return JSON.stringify({clicked: null, dialogs: dialogTexts});
+                // If no button found, check if clicking the email row already triggered the flow
+                // (some TikTok versions send code on row click without extra button)
+                return JSON.stringify({clicked: null, note: 'no_send_btn', dialogs: dialogTexts});
             """)
             step("send_code_click", f"Send code: {send_code_result}")
             time.sleep(5)
@@ -2108,7 +2164,11 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             """)
             step("verify_code_state", f"Code state: {json.dumps(code_state)[:500]}")
 
-            # Save browser session for code entry
+            # Save browser session for manual code entry via /api/submit-code
+            _pending_browser_sessions[username] = {
+                "driver": driver, "steps": steps, "snap": snap,
+                "email_for_code": username
+            }
             _pending_verification[username] = {
                 "driver": driver, "steps": steps, "snap": snap,
                 "email_for_code": username
