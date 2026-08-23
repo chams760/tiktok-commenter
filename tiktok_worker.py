@@ -1207,53 +1207,111 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             return {"ok": False, "steps": steps, "error": "Login button not found"}
 
         ActionChains(driver).move_to_element(login_btn).click().perform()
-        time.sleep(8)
-        _dismiss_cookie_banner(driver)
+        time.sleep(5)
         snap(driver, "after_login_click")
 
+        # Check modal for errors/captcha/verification BEFORE navigating away
+        modal_text = driver.execute_script("""
+            // Look for error messages in modal/form
+            var errors = [];
+            var errorEls = document.querySelectorAll(
+                '[class*="error"], [class*="Error"], [class*="alert"], [class*="warning"], '
+                + '[class*="captcha"], [class*="Captcha"], [class*="verify"], '
+                + '[class*="message"], [data-e2e*="error"]'
+            );
+            for (var i = 0; i < errorEls.length; i++) {
+                var t = (errorEls[i].innerText || '').trim();
+                if (t && t.length > 2 && t.length < 200 && errorEls[i].offsetHeight > 0) {
+                    errors.push(t);
+                }
+            }
+            // Also check for any red/error colored text
+            var allSpans = document.querySelectorAll('span, p, div');
+            for (var j = 0; j < allSpans.length; j++) {
+                var el = allSpans[j];
+                if (el.offsetHeight === 0) continue;
+                var style = window.getComputedStyle(el);
+                var color = style.color;
+                var text = (el.innerText || '').trim();
+                // Red-ish text (error messages)
+                if (color && color.match(/rgb\\(2[0-5]\\d,\\s*[0-5]?\\d,\\s*[0-5]?\\d\\)/) && text.length > 5 && text.length < 150) {
+                    errors.push('RED:' + text);
+                }
+            }
+            // Check if login modal is still visible
+            var modal = document.querySelector('[class*="modal"], [class*="Modal"], [class*="dialog"], [role="dialog"]');
+            var modalVisible = modal && modal.offsetHeight > 0;
+            // Get modal body text
+            var modalText = modal ? (modal.innerText || '').substring(0, 300) : '';
+            return JSON.stringify({errors: errors, modalVisible: modalVisible, modalText: modalText});
+        """)
+        step("modal_check", f"Modal state: {modal_text}")
+
+        try:
+            modal_data = json.loads(modal_text)
+        except Exception:
+            modal_data = {}
+
+        # Check for captcha in page source
+        page_src = driver.page_source.lower()
+        has_captcha = "captcha" in page_src or "puzzle" in page_src or "slider" in page_src
+
         body_text = driver.find_element(By.TAG_NAME, "body").text
-        step("after_login", f"URL: {driver.current_url} | Body: {body_text[:200]}")
+        step("after_login", f"URL: {driver.current_url} | Captcha: {has_captcha} | Body: {body_text[:200]}")
 
-        # Check login status properly (modal login doesn't change URL)
-        def _is_logged_in():
-            try:
-                # Reload page to get fresh state
-                driver.get("https://www.tiktok.com/foryou")
-                time.sleep(5)
-                b = driver.find_element(By.TAG_NAME, "body").text.lower()
-                src = driver.page_source.lower()
-                # If page has user profile elements and no "Log in" button in header
-                has_profile = any(x in src for x in [
-                    'data-e2e="profile-icon"', 'avatar', 'sidebar-profile',
-                    '"uniqueId":', 'data-e2e="nav-profile"'
-                ])
-                # Check body doesn't have a prominent Log in button
-                has_login_btn = bool(driver.execute_script("""
-                    var btns = document.querySelectorAll('[data-e2e="top-login-button"], header button');
-                    for (var i = 0; i < btns.length; i++) {
-                        var t = (btns[i].innerText || '').trim().toLowerCase();
-                        if (t === 'log in' || t === 'login') return true;
-                    }
-                    return false;
-                """))
-                return has_profile and not has_login_btn
-            except Exception:
-                return False
+        if has_captcha:
+            snap(driver, "captcha_login")
+            step("captcha", "CAPTCHA detected after login click. Waiting 10s for auto-solve...")
+            time.sleep(10)
+            body_text = driver.find_element(By.TAG_NAME, "body").text
 
-        if _is_logged_in():
+        # Check for rate limit
+        if "maximum" in body_text.lower() or "too many" in body_text.lower():
+            snap(driver, "rate_limited_modal")
+            step("rate_limited", f"Rate limited. Body: {body_text[:200]}")
+            driver.quit()
+            return {"ok": False, "steps": steps, "error": "Rate limited — wait 2-4 hours"}
+
+        # Check for wrong password
+        errors_text = " ".join(modal_data.get("errors", [])).lower()
+        if "incorrect" in errors_text or "wrong" in errors_text or "invalid" in errors_text:
+            step("wrong_creds", f"Wrong credentials: {errors_text[:200]}")
+            driver.quit()
+            return {"ok": False, "steps": steps, "error": "Wrong username or password"}
+
+        # Now check if actually logged in by reloading
+        time.sleep(3)
+        driver.get("https://www.tiktok.com/foryou")
+        time.sleep(5)
+        body_after = driver.find_element(By.TAG_NAME, "body").text
+        src_after = driver.page_source.lower()
+
+        has_login_btn = bool(driver.execute_script("""
+            var els = document.querySelectorAll('button, a, div');
+            for (var i = 0; i < els.length; i++) {
+                var t = (els[i].innerText || '').trim();
+                if ((t === 'Log in' || t === 'Login') && els[i].offsetHeight > 0) {
+                    var rect = els[i].getBoundingClientRect();
+                    if (rect.top < 100) return true;  // only header login button
+                }
+            }
+            return false;
+        """))
+
+        if not has_login_btn:
             _save_cookies(driver, username)
-            step("success", "LOGIN SUCCESS — profile detected!")
+            step("success", "LOGIN SUCCESS — Log in button gone!")
             driver.quit()
             return {"ok": True, "steps": steps}
 
-        # Re-read body after foryou check
-        body_text = driver.find_element(By.TAG_NAME, "body").text
-        # If still has "Log in" button -> login failed silently
-        if "verify" not in body_text.lower() and "code" not in body_text.lower():
+        # Login failed — check if verification needed
+        if "verify" in body_after.lower() or "code" in body_after.lower():
+            step("verify_needed", "Verification page detected after reload")
+        else:
             snap(driver, "login_failed_silent")
-            step("failed_silent", f"Login failed silently. Body: {body_text[:300]}")
+            step("failed_silent", f"Login failed. Errors: {modal_data.get('errors', [])} | Modal: {modal_data.get('modalText', '')[:200]}")
             driver.quit()
-            return {"ok": False, "steps": steps, "error": "Login failed — TikTok didn't accept credentials or blocked the attempt"}
+            return {"ok": False, "steps": steps, "error": f"Login failed silently. Modal errors: {modal_data.get('errors', [])}"}
 
         # Check: captcha on login page?
         page_src = driver.page_source.lower()
