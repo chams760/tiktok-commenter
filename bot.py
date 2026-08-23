@@ -283,6 +283,28 @@ async def api_submit_code(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+def _parse_netscape_cookies(txt: str) -> list[dict]:
+    """Parse Netscape/Mozilla cookies.txt format into list of cookie dicts."""
+    cookies = []
+    for line in txt.strip().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 7:
+            continue
+        domain, _flag, path, _secure, expires, name, value = parts[:7]
+        pc = {"name": name, "value": value, "domain": domain, "path": path}
+        try:
+            exp = int(expires)
+            if exp > 0:
+                pc["expires"] = exp
+        except ValueError:
+            pass
+        cookies.append(pc)
+    return cookies
+
+
 async def api_import_cookies(request):
     try:
         import json as _json
@@ -295,27 +317,42 @@ async def api_import_cookies(request):
         if not cookies_raw:
             return web.json_response({"error": "cookies required"}, status=400)
 
-        if isinstance(cookies_raw, str):
-            cookies = _json.loads(cookies_raw)
-        else:
-            cookies = cookies_raw
-
-        if isinstance(cookies, dict):
-            cookies = [cookies]
-
         pw_cookies = []
-        for c in cookies:
-            pc = {
-                "name": c.get("name", ""),
-                "value": c.get("value", ""),
-                "domain": c.get("domain", ".tiktok.com"),
-                "path": c.get("path", "/"),
-            }
-            if c.get("expirationDate"):
-                pc["expires"] = c["expirationDate"]
-            elif c.get("expires"):
-                pc["expires"] = c["expires"]
-            pw_cookies.append(pc)
+        if isinstance(cookies_raw, str):
+            stripped = cookies_raw.strip()
+            if stripped.startswith("[") or stripped.startswith("{"):
+                cookies = _json.loads(stripped)
+                if isinstance(cookies, dict):
+                    cookies = [cookies]
+                for c in cookies:
+                    pc = {
+                        "name": c.get("name", ""),
+                        "value": c.get("value", ""),
+                        "domain": c.get("domain", ".tiktok.com"),
+                        "path": c.get("path", "/"),
+                    }
+                    if c.get("expirationDate"):
+                        pc["expires"] = c["expirationDate"]
+                    elif c.get("expires"):
+                        pc["expires"] = c["expires"]
+                    pw_cookies.append(pc)
+            else:
+                pw_cookies = _parse_netscape_cookies(stripped)
+                if not pw_cookies:
+                    return web.json_response({"error": "Could not parse cookies — expected JSON or Netscape .txt format"}, status=400)
+        elif isinstance(cookies_raw, list):
+            for c in cookies_raw:
+                pc = {
+                    "name": c.get("name", ""),
+                    "value": c.get("value", ""),
+                    "domain": c.get("domain", ".tiktok.com"),
+                    "path": c.get("path", "/"),
+                }
+                if c.get("expirationDate"):
+                    pc["expires"] = c["expirationDate"]
+                elif c.get("expires"):
+                    pc["expires"] = c["expires"]
+                pw_cookies.append(pc)
 
         safe = username.replace("@", "_at_").replace(".", "_")
         path = os.path.join(SESSIONS_DIR, f"{safe}.json")
