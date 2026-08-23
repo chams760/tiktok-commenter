@@ -3319,29 +3319,66 @@ def _search_videos_sync(driver: webdriver.Chrome, query: str, max_results: int =
     try:
         search_url = f"https://www.tiktok.com/search/video?q={quote(query)}"
         driver.get(search_url)
-        time.sleep(random.uniform(4, 6))
+        time.sleep(random.uniform(5, 8))
         _dismiss_cookie_banner(driver)
 
-        scroll_count = max(max_results // 5, 3)
+        # Scroll to load more results
+        scroll_count = max(max_results // 5, 4)
         for i in range(scroll_count):
             driver.execute_script("window.scrollBy(0, window.innerHeight)")
-            time.sleep(random.uniform(1.5, 3.0))
+            time.sleep(random.uniform(2, 3.5))
             if i % 3 == 2:
                 _random_mouse_move(driver, 1)
 
-        links = driver.find_elements(By.CSS_SELECTOR, 'a[href*="/video/"]')
-        seen = set()
-        for link in links:
-            href = link.get_attribute("href")
-            if href and "/video/" in href and href not in seen:
-                if not href.startswith("http"):
-                    href = "https://www.tiktok.com" + href
-                seen.add(href)
-                urls.append(href)
-                if len(urls) >= max_results:
-                    break
+        # Collect video URLs via JS — multiple strategies
+        urls = driver.execute_script("""
+            var results = [];
+            var seen = {};
+
+            // Strategy 1: a[href*="/video/"]
+            var links = document.querySelectorAll('a[href*="/video/"]');
+            for (var i = 0; i < links.length; i++) {
+                var h = links[i].href;
+                if (h && !seen[h]) { seen[h] = 1; results.push(h); }
+            }
+
+            // Strategy 2: data-e2e search card links
+            var cards = document.querySelectorAll('[data-e2e="search-card-desc"] a, [data-e2e="search_top-item"] a');
+            for (var j = 0; j < cards.length; j++) {
+                var h2 = cards[j].href;
+                if (h2 && h2.indexOf('/video/') !== -1 && !seen[h2]) { seen[h2] = 1; results.push(h2); }
+            }
+
+            // Strategy 3: any link with /video/ or /@username pattern in search area
+            var allLinks = document.querySelectorAll('a');
+            for (var k = 0; k < allLinks.length; k++) {
+                var h3 = allLinks[k].href || '';
+                if (h3.match(/tiktok\\.com\\/@[\\w.]+\\/video\\/\\d+/) && !seen[h3]) {
+                    seen[h3] = 1;
+                    results.push(h3);
+                }
+            }
+
+            return results.slice(0, arguments[0]);
+        """, max_results)
 
         logger.info(f"Found {len(urls)} videos for '{query}'")
+
+        if not urls:
+            # Log page state for debugging
+            page_info = driver.execute_script("""
+                return {
+                    url: window.location.href,
+                    title: document.title,
+                    linkCount: document.querySelectorAll('a').length,
+                    videoLinks: document.querySelectorAll('a[href*="video"]').length,
+                    bodyLen: (document.body.innerText || '').length,
+                    bodySnippet: (document.body.innerText || '').substring(0, 300)
+                };
+            """)
+            logger.warning(f"No videos found. Page: {json.dumps(page_info)}")
+            snap(driver, "search_no_results")
+
     except Exception as e:
         logger.error(f"Search error: {e}")
     return urls
@@ -3400,41 +3437,97 @@ def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: s
         if comment_icon_result != 'already_visible':
             _human_delay(2, 4)
 
-        # Step 2: Find the comment input field
-        comment_box = driver.execute_script("""
-            // Wait a moment for panel to render
-            var selectors = [
-                '[data-e2e="comment-input"] [contenteditable="true"]',
-                '[class*="CommentInput"] [contenteditable="true"]',
-                '[class*="comment-input"] [contenteditable="true"]',
-                '[contenteditable="true"][data-placeholder*="comment" i]',
-                '[contenteditable="true"][data-placeholder*="Comment" i]',
-                '[contenteditable="true"][data-placeholder*="Add" i]',
-            ];
-            for (var s = 0; s < selectors.length; s++) {
-                var els = document.querySelectorAll(selectors[s]);
-                for (var i = 0; i < els.length; i++) {
-                    if (els[i].offsetHeight > 0 && els[i].offsetWidth > 30) {
-                        return els[i];
+        # Step 2: Click on the comment placeholder to activate the input
+        driver.execute_script("""
+            // Click on "Add comment" placeholder area first
+            var placeholders = document.querySelectorAll(
+                '[data-e2e="comment-input"], [class*="CommentInput"], [class*="comment-input"], ' +
+                '[class*="BottomComment"], [class*="bottom-comment"], [class*="CommentContainer"]'
+            );
+            for (var i = 0; i < placeholders.length; i++) {
+                if (placeholders[i].offsetHeight > 0) {
+                    placeholders[i].click();
+                    return 'clicked_container';
+                }
+            }
+            // Try clicking any element with "Add comment" or "comment" placeholder text
+            var all = document.querySelectorAll('div, span, p, input');
+            for (var j = 0; j < all.length; j++) {
+                var el = all[j];
+                if (el.offsetHeight === 0) continue;
+                var text = (el.textContent || el.placeholder || el.getAttribute('data-placeholder') || '').toLowerCase();
+                if ((text.indexOf('add comment') !== -1 || text.indexOf('add a comment') !== -1 ||
+                     text === 'comment' || text === 'comments') && el.offsetHeight < 100) {
+                    el.click();
+                    return 'clicked_placeholder';
+                }
+            }
+            return 'no_placeholder';
+        """)
+        _human_delay(1.5, 3)
+
+        # Step 3: Find the comment input field
+        def _find_comment_input():
+            return driver.execute_script("""
+                var selectors = [
+                    '[data-e2e="comment-input"] [contenteditable="true"]',
+                    '[class*="CommentInput"] [contenteditable="true"]',
+                    '[class*="comment-input"] [contenteditable="true"]',
+                    '[contenteditable="true"][data-placeholder*="comment" i]',
+                    '[contenteditable="true"][data-placeholder*="Add" i]',
+                    '[class*="DraftEditor"] [contenteditable="true"]',
+                    '[class*="public-DraftEditor"] [contenteditable="true"]',
+                    'br[data-text="true"]',
+                ];
+                for (var s = 0; s < selectors.length; s++) {
+                    var els = document.querySelectorAll(selectors[s]);
+                    for (var i = 0; i < els.length; i++) {
+                        var el = els[i];
+                        // For br[data-text], return the parent contenteditable
+                        if (el.tagName === 'BR') {
+                            var p = el.closest('[contenteditable="true"]');
+                            if (p && p.offsetHeight > 0) return p;
+                            continue;
+                        }
+                        if (el.offsetHeight > 0 && el.offsetWidth > 20) return el;
                     }
                 }
-            }
-            // Fallback: any visible contenteditable that's not the video title
-            var all = document.querySelectorAll('[contenteditable="true"]');
-            for (var j = 0; j < all.length; j++) {
-                if (all[j].offsetHeight > 0 && all[j].offsetWidth > 30) {
-                    var rect = all[j].getBoundingClientRect();
-                    if (rect.width < 800) return all[j];
+                // Fallback: any visible contenteditable
+                var all = document.querySelectorAll('[contenteditable="true"]');
+                for (var j = 0; j < all.length; j++) {
+                    if (all[j].offsetHeight > 0 && all[j].offsetWidth > 20) {
+                        var rect = all[j].getBoundingClientRect();
+                        if (rect.width < 800 && rect.height < 200) return all[j];
+                    }
                 }
-            }
-            return null;
-        """)
+                return null;
+            """)
+
+        comment_box = _find_comment_input()
 
         if not comment_box:
+            # Take screenshot and log what we see
             snap(driver, "no_comment_box")
+            diag = driver.execute_script("""
+                var ce = document.querySelectorAll('[contenteditable]');
+                var info = [];
+                for (var i = 0; i < ce.length; i++) {
+                    info.push({tag: ce[i].tagName, ce: ce[i].getAttribute('contenteditable'),
+                               h: ce[i].offsetHeight, w: ce[i].offsetWidth,
+                               ph: ce[i].getAttribute('data-placeholder') || '',
+                               cls: (ce[i].className || '').substring(0, 60)});
+                }
+                var inputs = document.querySelectorAll('input[type="text"], textarea');
+                for (var j = 0; j < inputs.length; j++) {
+                    info.push({tag: inputs[j].tagName, h: inputs[j].offsetHeight,
+                               ph: inputs[j].placeholder || '', name: inputs[j].name || ''});
+                }
+                return JSON.stringify(info);
+            """)
+            logger.warning(f"No comment input found. Editables: {diag}")
             return False, "no_comment_input"
 
-        # Step 3: Click on comment box to focus
+        # Click on comment box to focus
         try:
             ActionChains(driver).move_to_element(comment_box).click().perform()
         except Exception:
@@ -3442,25 +3535,7 @@ def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: s
         _human_delay(0.5, 1.0)
 
         # Re-find after click (React may re-render)
-        comment_box = driver.execute_script("""
-            var selectors = [
-                '[data-e2e="comment-input"] [contenteditable="true"]',
-                '[class*="CommentInput"] [contenteditable="true"]',
-                '[contenteditable="true"][data-placeholder*="comment" i]',
-                '[contenteditable="true"][data-placeholder*="Add" i]',
-            ];
-            for (var s = 0; s < selectors.length; s++) {
-                var els = document.querySelectorAll(selectors[s]);
-                for (var i = 0; i < els.length; i++) {
-                    if (els[i].offsetHeight > 0) return els[i];
-                }
-            }
-            var all = document.querySelectorAll('[contenteditable="true"]');
-            for (var j = 0; j < all.length; j++) {
-                if (all[j].offsetHeight > 0 && all[j].offsetWidth > 30) return all[j];
-            }
-            return null;
-        """) or comment_box
+        comment_box = _find_comment_input() or comment_box
 
         # Step 4: Type comment
         driver.execute_script("""
