@@ -230,6 +230,281 @@ for (var prop in document) {
 """
 
 
+def _try_solve_captcha(driver, steps, step_fn, snap_fn, ts, max_attempts=3):
+    """Try to solve TikTok slide/puzzle captcha using OpenCV template matching."""
+    try:
+        import cv2
+        import numpy as np
+        import base64
+    except ImportError:
+        step_fn("captcha_no_cv2", "OpenCV not installed, cannot auto-solve")
+        return False
+
+    for attempt in range(max_attempts):
+        try:
+            # Find captcha images via JS
+            captcha_data = driver.execute_script("""
+                var result = {bg: null, piece: null, sliderBtn: null, track: null};
+
+                // Method 1: Find images by class/id containing captcha keywords
+                var imgs = document.querySelectorAll('img');
+                for (var i = 0; i < imgs.length; i++) {
+                    var img = imgs[i];
+                    if (img.offsetHeight === 0) continue;
+                    var src = img.src || '';
+                    var cls = (img.className || '').toString().toLowerCase();
+                    var id = (img.id || '').toLowerCase();
+                    var w = img.offsetWidth, h = img.offsetHeight;
+
+                    // Background image (larger)
+                    if (w > 200 && h > 100) {
+                        if (!result.bg || w > result.bg.w) {
+                            result.bg = {src: src, w: w, h: h, cls: cls};
+                        }
+                    }
+                    // Puzzle piece (smaller, roughly square)
+                    if (w > 30 && w < 120 && h > 30 && h < 120) {
+                        result.piece = {src: src, w: w, h: h, cls: cls};
+                    }
+                }
+
+                // Method 2: Check canvas elements
+                var canvases = document.querySelectorAll('canvas');
+                for (var j = 0; j < canvases.length; j++) {
+                    var c = canvases[j];
+                    if (c.offsetHeight === 0) continue;
+                    try {
+                        var dataUrl = c.toDataURL('image/png');
+                        if (c.offsetWidth > 200) {
+                            result.bg = {src: dataUrl, w: c.offsetWidth, h: c.offsetHeight, cls: 'canvas'};
+                        } else if (c.offsetWidth > 30 && c.offsetWidth < 120) {
+                            result.piece = {src: dataUrl, w: c.offsetWidth, h: c.offsetHeight, cls: 'canvas'};
+                        }
+                    } catch(e) {}
+                }
+
+                // Method 3: Background images via CSS
+                if (!result.bg) {
+                    var divs = document.querySelectorAll('[class*="captcha"] div, [class*="verify"] div, [class*="puzzle"] div');
+                    for (var k = 0; k < divs.length; k++) {
+                        var d = divs[k];
+                        if (d.offsetHeight < 50) continue;
+                        var style = window.getComputedStyle(d);
+                        var bgImg = style.backgroundImage;
+                        if (bgImg && bgImg !== 'none' && bgImg.startsWith('url(')) {
+                            var url = bgImg.slice(5, -2);
+                            if (d.offsetWidth > 200) {
+                                result.bg = {src: url, w: d.offsetWidth, h: d.offsetHeight, cls: 'bg-div'};
+                            }
+                        }
+                    }
+                }
+
+                // Find slider button/handle
+                var sliderSels = [
+                    '[class*="slider"] [class*="btn"]', '[class*="slider"] [class*="handle"]',
+                    '[class*="slide"] [class*="btn"]', '[class*="drag"]',
+                    '[class*="seam-slider-btn"]', '[class*="captcha_verify_slide"]',
+                    '[class*="slider-btn"]', '[class*="SliderBtn"]',
+                ];
+                for (var m = 0; m < sliderSels.length; m++) {
+                    var btn = document.querySelector(sliderSels[m]);
+                    if (btn && btn.offsetHeight > 0) {
+                        result.sliderBtn = {cls: (btn.className || '').toString().substring(0, 60), w: btn.offsetWidth, h: btn.offsetHeight};
+                        break;
+                    }
+                }
+                // Fallback: any small draggable-looking element inside captcha area
+                if (!result.sliderBtn) {
+                    var captchaArea = document.querySelector('[class*="captcha"], [class*="verify"], [id*="captcha"]');
+                    if (captchaArea) {
+                        var smallEls = captchaArea.querySelectorAll('div, span, img');
+                        for (var n = 0; n < smallEls.length; n++) {
+                            var se = smallEls[n];
+                            if (se.offsetWidth > 20 && se.offsetWidth < 80 && se.offsetHeight > 20 && se.offsetHeight < 80) {
+                                var seStyle = window.getComputedStyle(se);
+                                if (seStyle.cursor === 'pointer' || seStyle.cursor === 'grab' || seStyle.cursor === 'move') {
+                                    result.sliderBtn = {cls: (se.className || '').toString().substring(0, 60), w: se.offsetWidth, h: se.offsetHeight};
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Find slider track
+                var trackSels = ['[class*="slider-track"]', '[class*="slide-track"]', '[class*="captcha_verify_bar"]', '[class*="slider_bar"]'];
+                for (var p = 0; p < trackSels.length; p++) {
+                    var tr = document.querySelector(trackSels[p]);
+                    if (tr && tr.offsetHeight > 0) {
+                        result.track = {w: tr.offsetWidth, h: tr.offsetHeight, left: tr.getBoundingClientRect().left};
+                        break;
+                    }
+                }
+
+                return JSON.stringify(result);
+            """)
+
+            step_fn("captcha_scan", f"Attempt {attempt+1}: {captcha_data}")
+            data = json.loads(captcha_data)
+
+            if not data.get("bg") or not data.get("sliderBtn"):
+                # No standard captcha elements found, try screenshot-based approach
+                step_fn("captcha_screenshot", "No captcha elements found, trying full-screenshot method")
+                screenshot_path = os.path.join(SCREENSHOTS_DIR, f"captcha_full_{ts}_{attempt}.png")
+                driver.save_screenshot(screenshot_path)
+
+                # Try to find and click a simple verify button instead
+                clicked = driver.execute_script("""
+                    var els = document.querySelectorAll('button, div[role="button"], [class*="verify-btn"]');
+                    for (var i = 0; i < els.length; i++) {
+                        var t = (els[i].innerText || '').trim().toLowerCase();
+                        if ((t.includes('verify') || t.includes('click') || t.includes('drag')) && els[i].offsetHeight > 0) {
+                            els[i].click();
+                            return 'clicked:' + t;
+                        }
+                    }
+                    return 'none';
+                """)
+                step_fn("captcha_btn_click", f"Verify button: {clicked}")
+                time.sleep(3)
+                # Check if captcha disappeared
+                page_src_check = driver.page_source.lower()
+                if "captcha" not in page_src_check and "puzzle" not in page_src_check:
+                    return True
+                continue
+
+            # Get background image and find gap position
+            bg_src = data["bg"]["src"]
+            track_width = data.get("track", {}).get("w", data["bg"]["w"])
+
+            # Take screenshot of captcha area for analysis
+            screenshot_path = os.path.join(SCREENSHOTS_DIR, f"captcha_solve_{ts}_{attempt}.png")
+            driver.save_screenshot(screenshot_path)
+            screenshot = cv2.imread(screenshot_path)
+
+            if screenshot is None:
+                step_fn("captcha_no_screenshot", "Failed to read screenshot")
+                continue
+
+            # Convert to grayscale and find the gap using edge detection
+            gray = cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(gray, 100, 200)
+
+            # Find the slider button element for drag
+            slider_btn = None
+            for sel in [
+                '[class*="slider"] [class*="btn"]', '[class*="slider"] [class*="handle"]',
+                '[class*="slide"] [class*="btn"]', '[class*="drag"]',
+                '[class*="seam-slider-btn"]', '[class*="captcha_verify_slide"]',
+                '[class*="slider-btn"]', '[class*="SliderBtn"]',
+            ]:
+                try:
+                    slider_btn = driver.find_element(By.CSS_SELECTOR, sel)
+                    if slider_btn and slider_btn.is_displayed():
+                        break
+                    slider_btn = None
+                except Exception:
+                    continue
+
+            if not slider_btn:
+                # Try to find by any element matching captcha slider patterns
+                try:
+                    slider_btn = driver.execute_script("""
+                        var captchaArea = document.querySelector('[class*="captcha"], [class*="verify"], [id*="captcha"]');
+                        if (!captchaArea) return null;
+                        var els = captchaArea.querySelectorAll('div, span, img, button');
+                        for (var i = 0; i < els.length; i++) {
+                            var el = els[i];
+                            if (el.offsetWidth > 20 && el.offsetWidth < 80 && el.offsetHeight > 20 && el.offsetHeight < 80) {
+                                return el;
+                            }
+                        }
+                        return null;
+                    """)
+                except Exception:
+                    pass
+
+            if not slider_btn:
+                step_fn("captcha_no_slider", "Could not find slider button element")
+                continue
+
+            # Calculate slide distance based on image analysis
+            # Use template matching if we have both images, otherwise estimate
+            slide_distance = int(track_width * random.uniform(0.3, 0.7))
+
+            # Try to detect gap position from screenshot using contour analysis
+            try:
+                # Look for the puzzle gap region in the captcha area
+                h, w = gray.shape
+                # Captcha is usually in the center-upper area
+                roi = edges[int(h*0.2):int(h*0.6), int(w*0.2):int(w*0.8)]
+                contours, _ = cv2.findContours(roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                # Find the largest rectangular contour (the gap)
+                best_x = None
+                for cnt in contours:
+                    x, y, cw, ch = cv2.boundingRect(cnt)
+                    if 20 < cw < 100 and 20 < ch < 100:
+                        actual_x = x + int(w * 0.2)
+                        if best_x is None or cw * ch > best_x[2]:
+                            best_x = (actual_x, cw * ch, cw)
+                if best_x:
+                    # Map screenshot x to track distance
+                    bg_elem_w = data["bg"]["w"]
+                    ratio = best_x[0] / w
+                    slide_distance = int(bg_elem_w * ratio)
+                    step_fn("captcha_gap_found", f"Gap detected at x={best_x[0]}, slide={slide_distance}px")
+            except Exception as e:
+                step_fn("captcha_gap_error", f"Gap detection failed: {e}, using estimate={slide_distance}")
+
+            # Perform human-like drag
+            actions = ActionChains(driver)
+            actions.click_and_hold(slider_btn)
+            actions.pause(random.uniform(0.1, 0.3))
+
+            # Move in steps with slight random y offset (human-like)
+            total = 0
+            while total < slide_distance:
+                chunk = random.randint(5, 25)
+                if total + chunk > slide_distance:
+                    chunk = slide_distance - total
+                y_offset = random.randint(-2, 2)
+                actions.move_by_offset(chunk, y_offset)
+                actions.pause(random.uniform(0.01, 0.05))
+                total += chunk
+
+            # Small overshoot then correction (human-like)
+            actions.move_by_offset(random.randint(2, 8), 0)
+            actions.pause(random.uniform(0.1, 0.2))
+            actions.move_by_offset(random.randint(-8, -2), 0)
+            actions.pause(random.uniform(0.2, 0.5))
+            actions.release()
+
+            try:
+                actions.perform()
+                step_fn("captcha_dragged", f"Slider dragged {slide_distance}px")
+            except Exception as e:
+                step_fn("captcha_drag_error", f"Drag failed: {e}")
+                continue
+
+            time.sleep(2)
+            snap_fn(driver, f"captcha_after_drag_{attempt}")
+
+            # Check if captcha is gone
+            page_src_check = driver.page_source.lower()
+            if "captcha" not in page_src_check and "puzzle" not in page_src_check and "slider" not in page_src_check:
+                return True
+
+            step_fn("captcha_retry", f"Captcha still present after attempt {attempt+1}")
+            time.sleep(2)
+
+        except Exception as e:
+            step_fn("captcha_error", f"Attempt {attempt+1} error: {e}")
+            time.sleep(1)
+
+    return False
+
+
 def _make_proxy_auth_extension_dir(host, port, username, password):
     import tempfile
     ext_dir = tempfile.mkdtemp(prefix="proxy_ext_")
@@ -1311,11 +1586,28 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
             except Exception:
                 pass
 
-            step("captcha", "CAPTCHA blocks login. Need captcha solving service (capsolver/2captcha) or manual solve.")
-            # Keep session alive for potential manual solve
-            _pending_browser_sessions[username] = {"driver": driver, "steps": steps, "has_captcha": True}
-            return {"ok": False, "steps": steps, "error": "CAPTCHA detected — automatic solving not yet implemented",
-                    "captcha": True, "captcha_info": captcha_info}
+            # Try to solve captcha automatically
+            step("captcha_solving", "Attempting auto-solve...")
+            solved = _try_solve_captcha(driver, steps, step, snap, ts)
+            if solved:
+                step("captcha_solved", "CAPTCHA solved!")
+                time.sleep(3)
+                body_text = driver.find_element(By.TAG_NAME, "body").text
+                # Re-check captcha (sometimes multiple rounds)
+                page_src2 = driver.page_source.lower()
+                if "captcha" in page_src2 or "puzzle" in page_src2:
+                    step("captcha_round2", "Second captcha round, trying again...")
+                    solved2 = _try_solve_captcha(driver, steps, step, snap, ts)
+                    if solved2:
+                        step("captcha_solved2", "Second captcha solved!")
+                        time.sleep(3)
+            else:
+                step("captcha_unsolved", "Could not auto-solve captcha")
+                _pending_browser_sessions[username] = {"driver": driver, "steps": steps, "has_captcha": True}
+                return {"ok": False, "steps": steps, "error": "CAPTCHA detected — auto-solve failed",
+                        "captcha": True, "captcha_info": captcha_info}
+
+            body_text = driver.find_element(By.TAG_NAME, "body").text
 
         # Check for rate limit
         if "maximum" in body_text.lower() or "too many" in body_text.lower():
