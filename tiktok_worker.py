@@ -613,6 +613,30 @@ def _make_proxy_auth_extension_dir(host, port, username, password):
     return ext_dir
 
 
+def _make_stealth_extension_dir():
+    """Create a Chrome extension that injects stealth JS via content script.
+    This avoids CDP Page.addScriptToEvaluateOnNewDocument which TikTok detects."""
+    import tempfile
+    ext_dir = tempfile.mkdtemp(prefix="stealth_ext_")
+    manifest = {
+        "version": "1.0.0",
+        "manifest_version": 2,
+        "name": "Content Helper",
+        "content_scripts": [{
+            "matches": ["<all_urls>"],
+            "js": ["stealth.js"],
+            "run_at": "document_start",
+            "all_frames": True
+        }],
+        "minimum_chrome_version": "22.0.0"
+    }
+    with open(os.path.join(ext_dir, "manifest.json"), "w") as f:
+        json.dump(manifest, f)
+    with open(os.path.join(ext_dir, "stealth.js"), "w") as f:
+        f.write(_STEALTH_JS)
+    return ext_dir
+
+
 _xvfb_proc = None
 
 def _ensure_xvfb():
@@ -658,15 +682,23 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
 
+    # Load stealth as extension (avoids detectable CDP calls)
+    extensions = []
+    stealth_ext = _make_stealth_extension_dir()
+    extensions.append(stealth_ext)
+
     if proxy_str and proxy_str.strip():
         parsed = _parse_proxy_parts(proxy_str)
         if parsed:
             host, port, user, passw = parsed
             if user and passw:
-                ext_dir = _make_proxy_auth_extension_dir(host, port, user, passw)
-                options.add_argument(f"--load-extension={ext_dir}")
+                proxy_ext = _make_proxy_auth_extension_dir(host, port, user, passw)
+                extensions.append(proxy_ext)
             else:
                 options.add_argument(f"--proxy-server=http://{host}:{port}")
+
+    if extensions:
+        options.add_argument(f"--load-extension={','.join(extensions)}")
 
     chrome_binary = None
     for path in ["/usr/bin/google-chrome-stable", "/usr/bin/google-chrome", "/usr/bin/chromium"]:
@@ -680,33 +712,8 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
     driver = webdriver.Chrome(service=service, options=options)
     driver.set_window_size(_w, _h)
 
-    # CDP stealth: inject BEFORE any page loads
-    try:
-        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": _STEALTH_JS})
-    except Exception:
-        pass
-
-    # Remove webdriver flag via CDP
-    try:
-        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-            "source": """
-                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-                // Remove Automation flags from permissions
-                const originalQuery = window.navigator.permissions.query;
-                window.navigator.permissions.query = (parameters) => (
-                    parameters.name === 'notifications' ?
-                    Promise.resolve({state: Notification.permission}) :
-                    originalQuery(parameters)
-                );
-                // Mask chrome.runtime for headed mode
-                if (!window.chrome) { window.chrome = {}; }
-                if (!window.chrome.runtime) { window.chrome.runtime = {}; }
-            """
-        })
-    except Exception:
-        pass
-
-    # Apply selenium-stealth on top
+    # NO CDP stealth injection — all stealth is via extension now
+    # Only apply selenium-stealth (it uses CDP but adds minimal footprint)
     try:
         from selenium_stealth import stealth
         stealth(driver,
@@ -720,7 +727,7 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
     except Exception as e:
         logger.debug(f"selenium-stealth failed: {e}")
 
-    logger.info(f"Chrome driver created | proxy={bool(proxy_str)} | xvfb={has_display}")
+    logger.info(f"Chrome driver created | proxy={bool(proxy_str)} | xvfb={has_display} | stealth=ext")
     return driver
 
 
