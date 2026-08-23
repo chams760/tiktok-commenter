@@ -1261,9 +1261,61 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
 
         if has_captcha:
             snap(driver, "captcha_login")
-            step("captcha", "CAPTCHA detected after login click. Waiting 10s for auto-solve...")
-            time.sleep(10)
-            body_text = driver.find_element(By.TAG_NAME, "body").text
+            # Analyze captcha type
+            captcha_info = driver.execute_script("""
+                var info = {type: 'unknown', iframes: [], elements: [], visible: false};
+                // Check iframes (captcha often in iframe)
+                var iframes = document.querySelectorAll('iframe');
+                for (var i = 0; i < iframes.length; i++) {
+                    var src = iframes[i].src || '';
+                    if (src) info.iframes.push(src.substring(0, 100));
+                }
+                // Check captcha-related elements
+                var selectors = [
+                    '[class*="captcha"]', '[class*="Captcha"]', '[id*="captcha"]',
+                    '[class*="verify"]', '[class*="Verify"]',
+                    '[class*="puzzle"]', '[class*="slider"]', '[class*="rotate"]',
+                    '[class*="whirl"]', '[class*="slide"]',
+                    'img[class*="captcha"]', 'canvas',
+                ];
+                for (var j = 0; j < selectors.length; j++) {
+                    var els = document.querySelectorAll(selectors[j]);
+                    for (var k = 0; k < els.length; k++) {
+                        var el = els[k];
+                        if (el.offsetHeight > 0) {
+                            info.visible = true;
+                            info.elements.push({
+                                tag: el.tagName,
+                                class: (el.className || '').toString().substring(0, 80),
+                                id: el.id || '',
+                                size: el.offsetWidth + 'x' + el.offsetHeight
+                            });
+                        }
+                    }
+                }
+                // Detect type
+                var src = document.documentElement.innerHTML.toLowerCase();
+                if (src.includes('slide') || src.includes('slider')) info.type = 'slide';
+                else if (src.includes('rotate') || src.includes('whirl')) info.type = 'rotate';
+                else if (src.includes('puzzle')) info.type = 'puzzle';
+                else if (src.includes('shapes') || src.includes('icon')) info.type = 'shapes';
+                return JSON.stringify(info);
+            """)
+            step("captcha_info", f"CAPTCHA details: {captcha_info}")
+
+            # Save captcha page HTML
+            try:
+                captcha_html = os.path.join(SCREENSHOTS_DIR, f"captcha_{ts}.html")
+                with open(captcha_html, "w", encoding="utf-8") as hf:
+                    hf.write(driver.page_source)
+            except Exception:
+                pass
+
+            step("captcha", "CAPTCHA blocks login. Need captcha solving service (capsolver/2captcha) or manual solve.")
+            # Keep session alive for potential manual solve
+            _pending_browser_sessions[username] = {"driver": driver, "steps": steps, "has_captcha": True}
+            return {"ok": False, "steps": steps, "error": "CAPTCHA detected — automatic solving not yet implemented",
+                    "captcha": True, "captcha_info": captcha_info}
 
         # Check for rate limit
         if "maximum" in body_text.lower() or "too many" in body_text.lower():
