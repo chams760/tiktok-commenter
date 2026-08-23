@@ -366,18 +366,29 @@ async def api_import_cookies(request):
                         pc["expires"] = c["expires"]
                     pw_cookies.append(pc)
 
-        # Add sessionid/sid_tt from separate fields (merge or create)
+        # Auto-extract sessionid from sid_guard if missing
+        existing_names = {c["name"] for c in pw_cookies}
+        if "sessionid" not in existing_names and not sessionid:
+            sid_guard_cookie = next((c for c in pw_cookies if c["name"] == "sid_guard"), None)
+            if sid_guard_cookie:
+                from urllib.parse import unquote
+                raw = unquote(sid_guard_cookie["value"])
+                sessionid = raw.split("|")[0] if "|" in raw else raw.split("%7C")[0]
+                logger.info(f"Auto-extracted sessionid from sid_guard: {sessionid[:8]}...")
+
+        # Add sessionid/sid_tt from separate fields or auto-extracted
         if sessionid:
-            existing_names = {c["name"] for c in pw_cookies}
             if "sessionid" not in existing_names:
                 pw_cookies.append({"name": "sessionid", "value": sessionid, "domain": ".tiktok.com", "path": "/"})
             if "sid_tt" not in existing_names:
                 pw_cookies.append({"name": "sid_tt", "value": sid_tt or sessionid, "domain": ".tiktok.com", "path": "/"})
-            if "sid_guard" not in existing_names:
-                pw_cookies.append({"name": "sid_guard", "value": sessionid, "domain": ".tiktok.com", "path": "/"})
 
         if not pw_cookies:
             return web.json_response({"error": "No cookies parsed"}, status=400)
+
+        has_session = any(c["name"] == "sessionid" for c in pw_cookies)
+        if not has_session:
+            return web.json_response({"error": "No sessionid found — need sessionid cookie or sid_guard to extract from"}, status=400)
 
         if not username:
             sid = next((c["value"][:8] for c in pw_cookies if c["name"] == "sessionid"), None)
