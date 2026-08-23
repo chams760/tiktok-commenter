@@ -250,6 +250,56 @@ for (var prop in document) {
         }
     }
 }
+
+// Notification permission — headless returns "denied", real browser returns "default"
+try {
+    Object.defineProperty(Notification, 'permission', {get: () => 'default'});
+} catch(e) {}
+
+// window.Notification constructor must exist
+if (typeof Notification === 'undefined') {
+    window.Notification = function() {};
+    window.Notification.permission = 'default';
+    window.Notification.requestPermission = function() { return Promise.resolve('default'); };
+}
+
+// Battery API — headless lacks it
+if (!navigator.getBattery) {
+    navigator.getBattery = function() {
+        return Promise.resolve({
+            charging: true, chargingTime: 0, dischargingTime: Infinity,
+            level: 0.97, addEventListener: function(){}
+        });
+    };
+}
+
+// Prevent detection via toString() checks
+try {
+    const fakeToString = Function.prototype.toString;
+    Function.prototype.toString = function() {
+        if (this === Function.prototype.toString) return 'function toString() { [native code] }';
+        if (this === navigator.permissions.query) return 'function query() { [native code] }';
+        return fakeToString.call(this);
+    };
+} catch(e) {}
+
+// Media devices — headless may have empty list
+if (navigator.mediaDevices && !navigator.mediaDevices._patched) {
+    const origEnum = navigator.mediaDevices.enumerateDevices;
+    navigator.mediaDevices.enumerateDevices = function() {
+        return origEnum.call(this).then(function(devices) {
+            if (devices.length === 0) {
+                return [
+                    {deviceId: 'default', kind: 'audioinput', label: '', groupId: 'default'},
+                    {deviceId: 'default', kind: 'videoinput', label: '', groupId: 'default'},
+                    {deviceId: 'default', kind: 'audiooutput', label: '', groupId: 'default'}
+                ];
+            }
+            return devices;
+        });
+    };
+    navigator.mediaDevices._patched = true;
+}
 """
 
 
@@ -563,9 +613,36 @@ def _make_proxy_auth_extension_dir(host, port, username, password):
     return ext_dir
 
 
+_xvfb_proc = None
+
+def _ensure_xvfb():
+    """Start Xvfb virtual display if not running (replaces --headless)."""
+    global _xvfb_proc
+    if _xvfb_proc and _xvfb_proc.poll() is None:
+        return
+    display_num = random.randint(10, 99)
+    _w = random.choice([1366, 1440, 1536, 1680, 1920])
+    _h = random.choice([768, 900, 864, 1050, 1080])
+    os.environ["DISPLAY"] = f":{display_num}"
+    try:
+        _xvfb_proc = subprocess.Popen(
+            ["Xvfb", f":{display_num}", "-screen", "0", f"{_w}x{_h}x24", "-ac", "-nolisten", "tcp"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        time.sleep(1)
+        logger.info(f"Xvfb started on :{display_num} ({_w}x{_h})")
+    except FileNotFoundError:
+        logger.warning("Xvfb not found, falling back to --headless=new")
+        os.environ.pop("DISPLAY", None)
+
+
 def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
+    _ensure_xvfb()
+    has_display = "DISPLAY" in os.environ
+
     options = ChromeOptions()
-    options.add_argument("--headless=new")
+    if not has_display:
+        options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
@@ -621,7 +698,7 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
                     Promise.resolve({state: Notification.permission}) :
                     originalQuery(parameters)
                 );
-                // Mask chrome.runtime for headless
+                // Mask chrome.runtime for headed mode
                 if (!window.chrome) { window.chrome = {}; }
                 if (!window.chrome.runtime) { window.chrome.runtime = {}; }
             """
@@ -643,7 +720,7 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
     except Exception as e:
         logger.debug(f"selenium-stealth failed: {e}")
 
-    logger.info(f"Chrome driver created | proxy={bool(proxy_str)}")
+    logger.info(f"Chrome driver created | proxy={bool(proxy_str)} | xvfb={has_display}")
     return driver
 
 
@@ -1134,7 +1211,8 @@ def _browser_fetch_login_sync(username: str, password: str, proxy: str = "",
         except Exception as e:
             step("driver_error", str(e))
             return {"ok": False, "steps": steps, "error": f"Chrome failed: {e}"}
-        step("init", f"Browser created | proxy: {bool(proxy)}")
+        has_xvfb = "DISPLAY" in os.environ
+        step("init", f"Browser created | proxy: {bool(proxy)} | xvfb: {has_xvfb}")
 
         # Check saved cookies first
         has_cookies = _load_cookies(driver, username)

@@ -35,6 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcursor1 \
     libx11-xcb1 \
     xdg-utils \
+    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Chrome + matching chromedriver via Chrome for Testing (stable channel)
