@@ -3771,6 +3771,9 @@ async def run_task(task_id: int):
 
             await db.update_task(task_id, comments_done=comments_done, comments_failed=comments_failed)
 
+            if comments_done >= task["max_comments"]:
+                break
+
             # Swipe to next video (Arrow Down)
             def _swipe_next():
                 driver = _active_drivers.get(task_id)
