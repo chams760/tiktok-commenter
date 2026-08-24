@@ -3403,8 +3403,40 @@ def _search_videos_sync(driver: webdriver.Chrome, query: str, max_results: int =
     return urls
 
 
-def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: str) -> tuple[bool, str]:
-    """Navigate to video and post a comment. Returns (success, detail)."""
+def _check_and_solve_captcha(driver):
+    """Check for captcha and try to solve it. Returns True if captcha was found."""
+    def snap(drv, name):
+        try:
+            p = os.path.join(SCREENSHOTS_DIR, f"{name}_{int(time.time())}.png")
+            drv.save_screenshot(p)
+        except Exception:
+            pass
+
+    has_captcha = driver.execute_script("""
+        var sels = ['[class*="captcha_verify"]', '[id*="captcha"]',
+                    '[class*="TUICaptcha"]', '[class*="seam-modal"]',
+                    'iframe[src*="captcha"]', 'iframe[src*="verify"]'];
+        for (var i = 0; i < sels.length; i++) {
+            var el = document.querySelector(sels[i]);
+            if (el && el.offsetHeight > 0) return true;
+        }
+        var bt = (document.body.innerText || '').toLowerCase();
+        if (bt.match(/drag.*slider|slide.*puzzle|verify.*human/)) return true;
+        return false;
+    """)
+    if has_captcha:
+        logger.info("Captcha detected, solving...")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        steps = []
+        def _step(name, detail): steps.append({"step": name, "detail": detail}); logger.info(f"captcha: {name} — {detail}")
+        solved = _try_solve_captcha(driver, steps, _step, snap, ts)
+        _human_delay(2, 3)
+        return solved
+    return None
+
+
+def _comment_on_current_video(driver: webdriver.Chrome, comment_text: str) -> tuple[bool, str]:
+    """Post a comment on the currently open video. Returns (success, detail)."""
     def snap(drv, name):
         try:
             p = os.path.join(SCREENSHOTS_DIR, f"{name}_{int(time.time())}.png")
@@ -3413,28 +3445,7 @@ def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: s
             pass
 
     try:
-        driver.get(video_url)
-        time.sleep(random.uniform(4, 6))
-        _dismiss_cookie_banner(driver)
-
-        # Check for captcha on page load
-        page_captcha = driver.execute_script("""
-            var sels = ['[class*="captcha_verify"]', '[id*="captcha"]',
-                        '[class*="TUICaptcha"]', '[class*="seam-modal"]',
-                        'iframe[src*="captcha"]', 'iframe[src*="verify"]'];
-            for (var i = 0; i < sels.length; i++) {
-                var el = document.querySelector(sels[i]);
-                if (el && el.offsetHeight > 0) return true;
-            }
-            return false;
-        """)
-        if page_captcha:
-            logger.info("Captcha on video page, solving...")
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            steps = []
-            def _step_load(name, detail): steps.append({"step": name, "detail": detail}); logger.info(f"captcha: {name} — {detail}")
-            _try_solve_captcha(driver, steps, _step_load, snap, ts)
-            _human_delay(2, 3)
+        _check_and_solve_captcha(driver)
 
         # Watch video for a moment (human behavior)
         _human_delay(2, 3)
@@ -3584,32 +3595,9 @@ def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: s
         _human_delay(3, 5)
 
         # Check for captcha after submitting comment
-        has_captcha = driver.execute_script("""
-            var sels = ['[class*="captcha_verify"]', '[id*="captcha"]',
-                        '[class*="TUICaptcha"]', '[class*="captcha-container"]',
-                        '[class*="seam-modal"]', 'iframe[src*="captcha"]',
-                        'iframe[src*="verify"]'];
-            for (var i = 0; i < sels.length; i++) {
-                var el = document.querySelector(sels[i]);
-                if (el && el.offsetHeight > 0) return true;
-            }
-            var bt = (document.body.innerText || '').toLowerCase();
-            if (bt.match(/drag.*slider|slide.*puzzle|verify.*human/)) return true;
-            return false;
-        """)
-
-        if has_captcha:
-            logger.info("Captcha detected after comment submit, solving...")
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            steps = []
-            def _step(name, detail): steps.append({"step": name, "detail": detail}); logger.info(f"captcha: {name} — {detail}")
-            solved = _try_solve_captcha(driver, steps, _step, snap, ts)
-            if solved:
-                logger.info("Captcha solved, re-submitting comment")
-                _human_delay(2, 3)
-            else:
-                logger.warning("Captcha not solved")
-                return False, "captcha_failed"
+        captcha_result = _check_and_solve_captcha(driver)
+        if captcha_result is False:
+            return False, "captcha_failed"
 
         # Check for errors
         error_text = driver.execute_script("""
@@ -3642,10 +3630,10 @@ def _post_comment_sync(driver: webdriver.Chrome, video_url: str, comment_text: s
             snap(driver, "comment_not_sent")
             return False, "comment_not_sent"
 
-        logger.info(f"Comment posted: {video_url}")
+        logger.info("Comment posted on current video")
         return True, "ok"
     except Exception as e:
-        logger.error(f"Comment error on {video_url}: {e}")
+        logger.error(f"Comment error: {e}")
         try:
             snap(driver, "comment_exception")
         except Exception:
@@ -3676,23 +3664,50 @@ async def run_task(task_id: int):
 
         proxy_str = account.get("proxy", "")
 
-        def _task_worker():
+        def _setup_and_open_first():
             driver = _create_driver(proxy_str)
             _active_drivers[task_id] = driver
             try:
-                # Restore session from cookies
                 logged_in = _restore_session_sync(driver, account["username"])
                 if not logged_in:
-                    return [], "login_failed"
+                    return "login_failed"
 
-                # Search for videos
-                video_urls = _search_videos_sync(driver, task["search_query"], task["max_comments"] * 2)
-                return video_urls, "ok"
+                from urllib.parse import quote
+                search_url = f"https://www.tiktok.com/search/video?q={quote(task['search_query'])}"
+                driver.get(search_url)
+                time.sleep(random.uniform(5, 8))
+                _dismiss_cookie_banner(driver)
+                _check_and_solve_captcha(driver)
+
+                # Click on the first video in search results
+                clicked = driver.execute_script("""
+                    var links = document.querySelectorAll('a[href*="/video/"]');
+                    for (var i = 0; i < links.length; i++) {
+                        if (links[i].offsetHeight > 0) {
+                            links[i].click();
+                            return 'ok';
+                        }
+                    }
+                    // Fallback: click any search card
+                    var cards = document.querySelectorAll('[data-e2e="search-card-desc"] a, [data-e2e*="search"] a[href*="/video/"]');
+                    for (var j = 0; j < cards.length; j++) {
+                        if (cards[j].offsetHeight > 0) {
+                            cards[j].click();
+                            return 'ok';
+                        }
+                    }
+                    return 'no_videos';
+                """)
+                if clicked == 'no_videos':
+                    return "no_videos"
+
+                time.sleep(random.uniform(3, 5))
+                return "ok"
             except Exception as e:
                 logger.error(f"Task worker setup error: {e}")
-                return [], str(e)
+                return str(e)
 
-        video_urls, setup_status = await loop.run_in_executor(_executor, _task_worker)
+        setup_status = await loop.run_in_executor(_executor, _setup_and_open_first)
 
         if setup_status == "login_failed":
             await db.set_account_status(account["id"], "login_failed")
@@ -3700,30 +3715,39 @@ async def run_task(task_id: int):
             logger.error(f"Task #{task_id}: login failed for {account['username']}")
             return
 
-        if not video_urls:
+        if setup_status == "no_videos":
             logger.warning(f"Task #{task_id}: no videos found")
             await db.update_task(task_id, status="done", finished_at=datetime.now(timezone.utc).isoformat())
             return
 
-        logger.info(f"Task #{task_id}: found {len(video_urls)} videos, commenting...")
+        if setup_status != "ok":
+            await db.update_task(task_id, status="error", finished_at=datetime.now(timezone.utc).isoformat())
+            return
 
-        # Comment on videos using the same browser session
-        for video_url in video_urls:
-            if comments_done >= task["max_comments"]:
-                break
+        logger.info(f"Task #{task_id}: first video opened, starting comment loop...")
 
+        # Comment loop: comment on current video, then swipe down to next
+        while comments_done < task["max_comments"]:
             task_check = await db.get_task(task_id)
             if task_check and task_check["status"] == "cancelled":
                 logger.info(f"Task #{task_id} cancelled")
                 break
 
-            def _do_comment(url=video_url):
+            def _do_comment():
                 driver = _active_drivers.get(task_id)
                 if not driver:
                     return False, "no_driver"
-                return _post_comment_sync(driver, url, task["comment_text"])
+                return _comment_on_current_video(driver, task["comment_text"])
 
             success, detail = await loop.run_in_executor(_executor, _do_comment)
+
+            video_url = "swipe_video"
+            try:
+                driver = _active_drivers.get(task_id)
+                if driver:
+                    video_url = driver.current_url
+            except Exception:
+                pass
 
             if success:
                 comments_done += 1
@@ -3742,14 +3766,31 @@ async def run_task(task_id: int):
                     return
 
                 if "captcha_failed" in detail:
-                    logger.warning(f"Task #{task_id}: captcha not solved, waiting 60s before retry")
+                    logger.warning(f"Task #{task_id}: captcha not solved, waiting 60s")
                     await asyncio.sleep(60)
-                    continue
 
             await db.update_task(task_id, comments_done=comments_done, comments_failed=comments_failed)
 
+            # Swipe to next video (Arrow Down)
+            def _swipe_next():
+                driver = _active_drivers.get(task_id)
+                if not driver:
+                    return False
+                try:
+                    from selenium.webdriver.common.keys import Keys
+                    driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ARROW_DOWN)
+                    time.sleep(random.uniform(2, 4))
+                    return True
+                except Exception as e:
+                    logger.error(f"Swipe failed: {e}")
+                    return False
+
+            swiped = await loop.run_in_executor(_executor, _swipe_next)
+            if not swiped:
+                break
+
             delay = random.uniform(config.DELAY_MIN, config.DELAY_MAX)
-            logger.info(f"Task #{task_id}: waiting {delay:.0f}s")
+            logger.info(f"Task #{task_id}: waiting {delay:.0f}s before next comment")
             await asyncio.sleep(delay)
 
     except Exception as e:
