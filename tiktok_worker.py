@@ -40,7 +40,9 @@ def _detect_chrome_version() -> str:
         return "126.0.0.0"
 
 _CHROME_VER = _detect_chrome_version()
-UA = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{_CHROME_VER} Safari/537.36"
+UA_DESKTOP = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{_CHROME_VER} Safari/537.36"
+UA_MOBILE = f"Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+UA = UA_MOBILE
 
 _pending_verification: dict[str, dict] = {}
 _pending_browser_sessions: dict[str, dict] = {}
@@ -759,8 +761,7 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
     options.add_argument("--disable-hang-monitor")
     options.add_argument("--renderer-process-limit=1")
     options.add_argument("--memory-pressure-off")
-    _w = random.choice([1366, 1440, 1536])
-    _h = random.choice([768, 900, 864])
+    _w, _h = 390, 844
     options.add_argument(f"--window-size={_w},{_h}")
     options.add_argument(f"--user-agent={UA}")
     options.add_argument("--lang=en-US")
@@ -769,6 +770,13 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
     options.add_argument("--disable-popup-blocking")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
+
+    # Mobile emulation
+    mobile_emulation = {
+        "deviceMetrics": {"width": _w, "height": _h, "pixelRatio": 3.0, "mobile": True},
+        "userAgent": UA,
+    }
+    options.add_experimental_option("mobileEmulation", mobile_emulation)
 
     # Load stealth as extension (avoids detectable CDP calls)
     extensions = []
@@ -801,7 +809,10 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
     service = Service("/usr/local/bin/chromedriver")
     driver = webdriver.Chrome(service=service, options=options)
     driver.set_page_load_timeout(45)
-    driver.set_window_size(_w, _h)
+    try:
+        driver.set_window_size(_w, _h)
+    except Exception:
+        pass
 
     # NO CDP stealth injection — all stealth is via extension now
     # Only apply selenium-stealth (it uses CDP but adds minimal footprint)
@@ -809,10 +820,10 @@ def _create_driver(proxy_str: str = "") -> webdriver.Chrome:
         from selenium_stealth import stealth
         stealth(driver,
             languages=["en-US", "en"],
-            vendor="Google Inc.",
-            platform="Win32",
-            webgl_vendor="Intel Inc.",
-            renderer="Intel Iris OpenGL Engine",
+            vendor="Apple Computer, Inc.",
+            platform="iPhone",
+            webgl_vendor="Apple Inc.",
+            renderer="Apple GPU",
             fix_hairline=True,
         )
     except Exception as e:
